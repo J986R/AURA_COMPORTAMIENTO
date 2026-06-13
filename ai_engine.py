@@ -1,12 +1,12 @@
 import json
 import re
-
-from google import genai
-from google.genai import types
+import requests
 
 from config import get_setting
 
+
 MODELO_IA = get_setting("GEMINI_MODEL", "gemini-2.0-flash-lite")
+
 
 PREGUNTAS_TEXTO = {
     1: "¿Te sientes abrumado por la cantidad de tareas, trabajos o exámenes?",
@@ -34,13 +34,11 @@ PREGUNTAS_TEXTO = {
 
 def _api_key() -> str:
     key = get_setting("GEMINI_API_KEY")
+
     if not key:
         raise RuntimeError("Falta configurar GEMINI_API_KEY en Streamlit Secrets o en el archivo .env local.")
+
     return key
-
-
-def _client():
-    return genai.Client(api_key=_api_key())
 
 
 def extraer_json(texto: str):
@@ -50,15 +48,61 @@ def extraer_json(texto: str):
         pass
 
     coincidencia = re.search(r"\{[\s\S]*\}", texto or "")
+
     if coincidencia:
         try:
             return json.loads(coincidencia.group())
         except Exception:
             return None
+
     return None
 
 
-def _normalizar_resultado(datos: dict, respuestas: dict[int, int]):
+def _generar_texto(prompt: str, temperature: float = 0.3, json_mode: bool = False) -> str:
+    api_key = _api_key()
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODELO_IA}:generateContent?key={api_key}"
+
+    generation_config = {
+        "temperature": temperature
+    }
+
+    if json_mode:
+        generation_config["responseMimeType"] = "application/json"
+
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": generation_config
+    }
+
+    response = requests.post(
+        url,
+        json=payload,
+        timeout=60
+    )
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Error Gemini API {response.status_code}: {response.text}"
+        )
+
+    data = response.json()
+
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        raise RuntimeError(f"Respuesta inesperada de Gemini: {data}")
+
+
+def _normalizar_resultado(datos: dict, respuestas: dict):
     campos = [
         "puntaje_riesgo",
         "nivel_riesgo",
@@ -71,36 +115,41 @@ def _normalizar_resultado(datos: dict, respuestas: dict[int, int]):
         "recomendacion_estudiante",
         "recomendacion_tutoria",
     ]
+
     for campo in campos:
         if campo not in datos:
             raise ValueError(f"Falta el campo obligatorio: {campo}")
 
     datos["puntaje_riesgo"] = max(0, min(100, int(float(datos["puntaje_riesgo"]))))
+
     if datos["nivel_riesgo"] not in ["Bajo", "Medio", "Alto"]:
         datos["nivel_riesgo"] = "Medio"
 
-    for campo in ["indice_estres", "indice_procrastinacion", "indice_motivacion", "indice_estado_animo"]:
+    for campo in [
+        "indice_estres",
+        "indice_procrastinacion",
+        "indice_motivacion",
+        "indice_estado_animo"
+    ]:
         datos[campo] = round(max(1.0, min(5.0, float(datos[campo]))), 2)
 
     datos["alerta_emocional"] = 1 if int(datos["alerta_emocional"]) == 1 or int(respuestas[20]) >= 4 else 0
+
+    datos["diagnostico_general"] = str(datos["diagnostico_general"])
+    datos["recomendacion_estudiante"] = str(datos["recomendacion_estudiante"])
+    datos["recomendacion_tutoria"] = str(datos["recomendacion_tutoria"])
+
     datos["exito"] = True
+
     return datos
 
 
-def _generar_texto(prompt: str, temperature: float = 0.3, json_mode: bool = False) -> str:
-    config_kwargs = {"temperature": temperature}
-    if json_mode:
-        config_kwargs["response_mime_type"] = "application/json"
-
-    response = _client().models.generate_content(
-        model=MODELO_IA,
-        contents=prompt,
-        config=types.GenerateContentConfig(**config_kwargs),
-    )
-    return response.text or ""
-
-
-def generar_diagnostico_ia(nombre_estudiante: str, horas_estudio_dia: float, promedio_ponderado: float, respuestas: dict[int, int]):
+def generar_diagnostico_ia(
+    nombre_estudiante: str,
+    horas_estudio_dia: float,
+    promedio_ponderado: float,
+    respuestas: dict
+):
     respuestas_texto = "\n".join([
         f"Pregunta {i}: {PREGUNTAS_TEXTO[i]} Respuesta: {respuestas[i]}/5"
         for i in range(1, 21)
@@ -136,15 +185,17 @@ Dimensiones:
 - Preguntas 16 a 20: estado de ánimo
 - Pregunta 20: señal de alerta emocional si la respuesta es alta
 
-Devuelve SOLO JSON válido, sin markdown ni texto adicional:
+Devuelve SOLO JSON válido, sin markdown ni texto adicional.
+
+Formato obligatorio:
 {{
-  "puntaje_riesgo": número entero de 0 a 100,
-  "nivel_riesgo": "Bajo" o "Medio" o "Alto",
-  "indice_estres": número decimal de 1 a 5,
-  "indice_procrastinacion": número decimal de 1 a 5,
-  "indice_motivacion": número decimal de 1 a 5,
-  "indice_estado_animo": número decimal de 1 a 5,
-  "alerta_emocional": 0 o 1,
+  "puntaje_riesgo": 0,
+  "nivel_riesgo": "Bajo",
+  "indice_estres": 1.0,
+  "indice_procrastinacion": 1.0,
+  "indice_motivacion": 5.0,
+  "indice_estado_animo": 1.0,
+  "alerta_emocional": 0,
   "diagnostico_general": "texto breve",
   "recomendacion_estudiante": "texto breve",
   "recomendacion_tutoria": "texto breve"
@@ -159,17 +210,29 @@ Criterios:
 """
 
     try:
-        contenido = _generar_texto(prompt, temperature=0.2, json_mode=True)
+        contenido = _generar_texto(
+            prompt,
+            temperature=0.2,
+            json_mode=True
+        )
+
         datos = extraer_json(contenido)
+
         if datos is None:
             return {
                 "exito": False,
                 "error": "La IA no devolvió un JSON válido.",
                 "respuesta_original": contenido,
             }
+
         return _normalizar_resultado(datos, respuestas)
+
     except Exception as error:
-        return {"exito": False, "error": str(error), "respuesta_original": ""}
+        return {
+            "exito": False,
+            "error": str(error),
+            "respuesta_original": ""
+        }
 
 
 def generar_recomendacion_ia(
@@ -186,8 +249,12 @@ def generar_recomendacion_ia(
     cursos_dificultad: list,
 ):
     cursos_texto = "No hay cursos registrados."
+
     if cursos_dificultad:
-        cursos_texto = "\n".join([f"- {curso[0]}: dificultad {curso[1]}/5" for curso in cursos_dificultad])
+        cursos_texto = "\n".join([
+            f"- {curso[0]}: dificultad {curso[1]}/5"
+            for curso in cursos_dificultad
+        ])
 
     prompt = f"""
 Eres AURA, un coach académico universitario.
@@ -222,8 +289,14 @@ Responde en español con esta estructura:
 
 Sé concreto, empático y práctico.
 """
+
     try:
-        return _generar_texto(prompt, temperature=0.4, json_mode=False)
+        return _generar_texto(
+            prompt,
+            temperature=0.4,
+            json_mode=False
+        )
+
     except Exception as error:
         return f"""
 No se pudo conectar con la IA en la nube.
