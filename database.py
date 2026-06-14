@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime
 from typing import Any, Optional
 
@@ -150,6 +151,25 @@ def crear_tablas():
                     prioridad TEXT,
                     estado TEXT,
                     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS planes_semanales (
+                    id SERIAL PRIMARY KEY,
+                    estudiante_id INTEGER NOT NULL REFERENCES estudiantes(id) ON DELETE CASCADE,
+                    plan_json TEXT NOT NULL,
+                    horas_disponibles REAL,
+                    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS coach_recomendaciones (
+                    id SERIAL PRIMARY KEY,
+                    estudiante_id INTEGER NOT NULL REFERENCES estudiantes(id) ON DELETE CASCADE,
+                    recomendacion TEXT NOT NULL,
+                    fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -609,6 +629,101 @@ def eliminar_tarea(tarea_id: int):
     _execute("DELETE FROM tareas WHERE id = %s", (tarea_id,))
 
 
+def obtener_tarea_por_id(tarea_id: int):
+    return _fetchone(
+        """
+        SELECT t.id, t.estudiante_id, t.curso_id, t.titulo, COALESCE(t.descripcion, ''),
+               t.fecha_entrega, t.prioridad, t.estado, c.nombre_curso, c.dificultad
+        FROM tareas t
+        INNER JOIN cursos c ON t.curso_id = c.id
+        WHERE t.id = %s
+        """,
+        (tarea_id,),
+    )
+
+
+def actualizar_tarea(tarea_id: int, curso_id: int, titulo: str, descripcion: str, fecha_entrega: str, estado: str, dificultad: int):
+    prioridad = calcular_prioridad_tarea(fecha_entrega, dificultad)
+    _execute(
+        """
+        UPDATE tareas
+        SET curso_id = %s,
+            titulo = %s,
+            descripcion = %s,
+            fecha_entrega = %s,
+            prioridad = %s,
+            estado = %s
+        WHERE id = %s
+        """,
+        (curso_id, titulo, descripcion, fecha_entrega, prioridad, estado, tarea_id),
+    )
+    return True, "Tarea actualizada correctamente."
+
+
+def guardar_plan_semanal(estudiante_id: int, plan: list, horas_disponibles: float):
+    plan_json = json.dumps(plan, ensure_ascii=False)
+    _execute(
+        """
+        INSERT INTO planes_semanales (estudiante_id, plan_json, horas_disponibles, fecha)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (estudiante_id, plan_json, horas_disponibles, datetime.now()),
+    )
+    return True
+
+
+def obtener_ultimo_plan_semanal(estudiante_id: int):
+    fila = _fetchone(
+        """
+        SELECT id, plan_json, horas_disponibles, fecha
+        FROM planes_semanales
+        WHERE estudiante_id = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (estudiante_id,),
+    )
+    if fila is None:
+        return None
+    try:
+        plan = json.loads(fila[1])
+    except Exception:
+        plan = []
+    return {
+        "id": fila[0],
+        "plan": plan,
+        "horas_disponibles": fila[2],
+        "fecha": fila[3],
+    }
+
+
+def guardar_recomendacion_coach(estudiante_id: int, recomendacion: str):
+    _execute(
+        """
+        INSERT INTO coach_recomendaciones (estudiante_id, recomendacion, fecha)
+        VALUES (%s, %s, %s)
+        """,
+        (estudiante_id, recomendacion, datetime.now()),
+    )
+    return True
+
+
+def obtener_ultima_recomendacion_coach(estudiante_id: int):
+    fila = _fetchone(
+        """
+        SELECT id, recomendacion, fecha
+        FROM coach_recomendaciones
+        WHERE estudiante_id = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (estudiante_id,),
+    )
+    if fila is None:
+        return None
+    return {"id": fila[0], "recomendacion": fila[1], "fecha": fila[2]}
+
+
 def obtener_resumen_tareas(estudiante_id: int):
     fila = _fetchone(
         """
@@ -682,7 +797,7 @@ def obtener_panel_tutoria():
 
 
 def obtener_tabla_completa(tabla: str):
-    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas"}
+    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones"}
     if tabla not in permitidas:
         raise ValueError("Tabla no permitida.")
     with conectar() as conn:

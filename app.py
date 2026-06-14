@@ -8,6 +8,7 @@ from ai_engine import generar_diagnostico_ia, generar_plan_semanal_ia, generar_r
 from database import (
     actualizar_curso,
     actualizar_estado_tarea,
+    actualizar_tarea,
     actualizar_estudiante,
     actualizar_usuario,
     autenticar_usuario,
@@ -19,6 +20,8 @@ from database import (
     existe_curso,
     existe_tarea,
     guardar_diagnostico_ia,
+    guardar_plan_semanal,
+    guardar_recomendacion_coach,
     listar_cursos_por_estudiante,
     listar_estudiantes,
     listar_tareas_para_planificador,
@@ -27,6 +30,9 @@ from database import (
     obtener_cursos_mayor_dificultad,
     obtener_estudiante_por_id,
     obtener_panel_tutoria,
+    obtener_tarea_por_id,
+    obtener_ultimo_plan_semanal,
+    obtener_ultima_recomendacion_coach,
     obtener_resumen_tareas,
     obtener_tabla_completa,
     obtener_ultimo_diagnostico,
@@ -201,6 +207,22 @@ def mostrar_estado_riesgo(nivel, puntaje):
         st.warning(f"Riesgo académico IA: {nivel} | Puntaje: {puntaje}/100")
     else:
         st.success(f"Riesgo académico IA: {nivel} | Puntaje: {puntaje}/100")
+
+
+def mostrar_plan_guardado(plan):
+    if not plan:
+        st.info("No hay actividades asignadas en el plan.")
+        return
+    for dia in plan:
+        st.subheader(dia.get("dia", "Día"))
+        st.caption(f"Horas disponibles aproximadas: {dia.get('horas_disponibles', 0)} h")
+        if dia.get("recomendacion"):
+            st.info(dia.get("recomendacion"))
+        tareas_dia = dia.get("tareas", []) or []
+        if tareas_dia:
+            st.dataframe(pd.DataFrame(tareas_dia), use_container_width=True)
+        else:
+            st.write("Sin actividades asignadas.")
 
 
 safe_init()
@@ -482,22 +504,27 @@ elif menu == "Diagnóstico académico":
             else:
                 resultado["nivel_riesgo"] = nivel_por_puntaje(resultado["puntaje_riesgo"])
                 guardar_diagnostico_ia(estudiante_id, horas_estudio_dia, promedio_ponderado, respuestas, resultado)
-                mostrar_estado_riesgo(resultado["nivel_riesgo"], resultado["puntaje_riesgo"])
+                st.success("Diagnóstico generado y guardado correctamente.")
+                detalle = obtener_ultimo_diagnostico_detallado(estudiante_id)
 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Estrés", resultado["indice_estres"])
-                c2.metric("Procrastinación", resultado["indice_procrastinacion"])
-                c3.metric("Motivación", resultado["indice_motivacion"])
-                c4.metric("Estado de ánimo", resultado["indice_estado_animo"])
+        if detalle:
+            st.divider()
+            st.subheader("Último diagnóstico guardado")
+            mostrar_estado_riesgo(detalle.get("nivel_riesgo"), detalle.get("puntaje_riesgo"))
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Estrés", detalle.get("indice_estres"))
+            c2.metric("Procrastinación", detalle.get("indice_procrastinacion"))
+            c3.metric("Motivación", detalle.get("indice_motivacion"))
+            c4.metric("Estado de ánimo", detalle.get("indice_estado_animo"))
 
-                st.subheader("Diagnóstico general IA")
-                st.write(resultado["diagnostico_general"])
-                st.subheader("Recomendación para el estudiante")
-                st.write(resultado["recomendacion_estudiante"])
-                st.subheader("Recomendación para tutoría")
-                st.write(resultado["recomendacion_tutoria"])
-                if resultado["alerta_emocional"] == 1:
-                    st.error("Alerta emocional detectada. Se recomienda seguimiento por tutoría o área de apoyo correspondiente.")
+            st.subheader("Diagnóstico general IA")
+            st.write(detalle.get("diagnostico_general_ia") or "No disponible")
+            st.subheader("Recomendación para el estudiante")
+            st.write(detalle.get("recomendacion_estudiante_ia") or "No disponible")
+            st.subheader("Recomendación para tutoría")
+            st.write(detalle.get("recomendacion_tutoria_ia") or "No disponible")
+            if detalle.get("alerta_emocional") == 1:
+                st.error("Alerta emocional detectada. Se recomienda seguimiento por tutoría o área de apoyo correspondiente.")
 
 elif menu == "Cursos":
     st.header("Registro de cursos")
@@ -591,6 +618,53 @@ elif menu == "Tareas":
         df_or_info(tareas, ["ID", "Tarea", "Curso", "Fecha entrega", "Prioridad", "Estado"], "Este estudiante aún no tiene tareas registradas.")
 
         if tareas:
+            with st.expander("Editar tarea"):
+                opciones_editar = {f"{t[1]} | {t[2]} | Fecha: {t[3]} | Estado: {t[5]}": t[0] for t in tareas}
+                texto_tarea = st.selectbox("Tarea a editar", list(opciones_editar.keys()), key="select_editar_tarea")
+                tarea_id = opciones_editar[texto_tarea]
+                tarea = obtener_tarea_por_id(tarea_id)
+
+                if tarea is None:
+                    st.error("No se encontró la tarea seleccionada.")
+                elif not cursos:
+                    st.warning("Primero debes registrar cursos para editar la tarea.")
+                else:
+                    curso_actual_id = tarea[2]
+                    opciones_cursos_editar = {f"{c[1]} | Dificultad: {c[4]}": {"id": c[0], "dificultad": c[4]} for c in cursos}
+                    lista_cursos = list(opciones_cursos_editar.keys())
+                    indice_curso = 0
+                    for idx, nombre_opcion in enumerate(lista_cursos):
+                        if opciones_cursos_editar[nombre_opcion]["id"] == curso_actual_id:
+                            indice_curso = idx
+                            break
+
+                    estados_tarea = ["Pendiente", "En proceso", "Completada"]
+                    estado_actual = tarea[7] if tarea[7] in estados_tarea else "Pendiente"
+                    indice_estado = estados_tarea.index(estado_actual)
+
+                    with st.form("form_editar_tarea"):
+                        curso_edit_texto = st.selectbox("Curso", lista_cursos, index=indice_curso, key="edit_tarea_curso")
+                        nuevo_titulo = st.text_input("Título", value=tarea[3] or "")
+                        nueva_descripcion = st.text_area("Descripción", value=tarea[4] or "")
+                        nueva_fecha = st.date_input("Fecha de entrega", value=tarea[5], key="edit_tarea_fecha")
+                        nuevo_estado = st.selectbox("Estado", estados_tarea, index=indice_estado, key="edit_tarea_estado")
+                        if st.form_submit_button("Guardar cambios de la tarea"):
+                            if not nuevo_titulo.strip():
+                                st.error("El título de la tarea no puede estar vacío.")
+                            else:
+                                curso_data = opciones_cursos_editar[curso_edit_texto]
+                                actualizar_tarea(
+                                    tarea_id,
+                                    curso_data["id"],
+                                    nuevo_titulo.strip(),
+                                    nueva_descripcion.strip(),
+                                    nueva_fecha.strftime("%Y-%m-%d"),
+                                    nuevo_estado,
+                                    int(curso_data["dificultad"] or 3),
+                                )
+                                st.success("Tarea actualizada correctamente.")
+                                st.rerun()
+
             with st.expander("Actualizar estado de tarea"):
                 opciones = {f"{t[1]} | {t[2]} | Estado actual: {t[5]}": t[0] for t in tareas}
                 texto = st.selectbox("Tarea", list(opciones.keys()))
@@ -678,6 +752,13 @@ elif menu == "Planificador semanal":
         diagnostico = obtener_ultimo_diagnostico(estudiante_id)
         detalle = obtener_ultimo_diagnostico_detallado(estudiante_id)
         tareas = listar_tareas_para_planificador(estudiante_id)
+        ultimo_plan = obtener_ultimo_plan_semanal(estudiante_id)
+
+        if ultimo_plan:
+            with st.expander("Ver último plan semanal guardado", expanded=True):
+                st.caption(f"Generado: {ultimo_plan.get('fecha')} | Horas usadas: {ultimo_plan.get('horas_disponibles')} h/semana")
+                mostrar_plan_guardado(ultimo_plan.get("plan", []))
+
         if diagnostico is None:
             st.warning("Este estudiante aún no tiene diagnóstico registrado.")
         elif not tareas:
@@ -701,27 +782,21 @@ elif menu == "Planificador semanal":
                 "indice_estado_animo": detalle.get("indice_estado_animo") if detalle else 3,
             }
 
-            if st.button("Generar plan semanal con IA"):
+            if st.button("Generar nuevo plan semanal con IA"):
                 with st.spinner("AURA está generando un plan semanal realista con IA..."):
                     resultado_plan = generar_plan_semanal_ia(nombre, diag_plan, tareas, horas_disponibles)
                 if not resultado_plan.get("exito"):
-                    st.error("No se pudo generar el plan con IA. Se muestra un plan de respaldo.")
+                    st.error("No se pudo generar el plan con IA. Se muestra un plan de respaldo y también se guardará.")
                     st.code(resultado_plan.get("error", "Error desconocido"))
                     plan = generar_plan_semanal(tareas, horas_disponibles, riesgo)
                 else:
                     plan = resultado_plan.get("plan", [])
                     st.success("Plan semanal generado con IA.")
 
-                for dia in plan:
-                    st.subheader(dia.get("dia", "Día"))
-                    st.caption(f"Horas disponibles aproximadas: {dia.get('horas_disponibles', 0)} h")
-                    if dia.get("recomendacion"):
-                        st.info(dia.get("recomendacion"))
-                    tareas_dia = dia.get("tareas", [])
-                    if tareas_dia:
-                        st.dataframe(pd.DataFrame(tareas_dia), use_container_width=True)
-                    else:
-                        st.write("Sin actividades asignadas.")
+                guardar_plan_semanal(estudiante_id, plan, horas_disponibles)
+                st.success("Plan semanal guardado correctamente.")
+                st.subheader("Plan generado")
+                mostrar_plan_guardado(plan)
 
 elif menu == "Coach IA":
     st.header("Coach académico con IA")
@@ -730,6 +805,13 @@ elif menu == "Coach IA":
         diagnostico = obtener_ultimo_diagnostico(estudiante_id)
         resumen = obtener_resumen_tareas(estudiante_id)
         cursos_dificultad = obtener_cursos_mayor_dificultad(estudiante_id)
+        ultima_rec = obtener_ultima_recomendacion_coach(estudiante_id)
+
+        if ultima_rec:
+            with st.expander("Ver última recomendación guardada", expanded=True):
+                st.caption(f"Generada: {ultima_rec.get('fecha')}")
+                st.markdown(ultima_rec.get("recomendacion") or "")
+
         if diagnostico is None:
             st.warning("Este estudiante aún no tiene diagnóstico registrado.")
         else:
@@ -741,10 +823,11 @@ elif menu == "Coach IA":
             c2.metric("Puntaje riesgo", f"{puntaje}/100")
             c3.metric("Tareas pendientes", resumen["pendientes"])
             c4.metric("Alta prioridad", resumen["alta_prioridad"])
-            if st.button("Generar recomendación con IA"):
+            if st.button("Generar nueva recomendación con IA"):
                 with st.spinner("AURA está generando una recomendación con Gemini..."):
                     rec = generar_recomendacion_ia(nombre, horas, promedio, tareas_pend, estres, motivacion, procrast, puntaje, riesgo, resumen, cursos_dificultad)
-                st.success("Recomendación generada por AURA:")
+                guardar_recomendacion_coach(estudiante_id, rec)
+                st.success("Recomendación generada y guardada por AURA:")
                 st.markdown(rec)
 
 elif menu == "Panel de Tutoría":

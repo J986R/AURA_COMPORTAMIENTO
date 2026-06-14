@@ -7,6 +7,7 @@ from openpyxl.utils import get_column_letter
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
@@ -161,8 +162,8 @@ def crear_pdf_reporte(nombre, codigo, carrera, ciclo, diagnostico, diagnostico_d
     styles = getSampleStyleSheet()
     title = ParagraphStyle("AuraTitle", parent=styles["Title"], fontSize=18, leading=22, spaceAfter=12)
     h2 = ParagraphStyle("AuraH2", parent=styles["Heading2"], fontSize=13, leading=16, spaceBefore=10, spaceAfter=6)
-    normal = ParagraphStyle("AuraNormal", parent=styles["BodyText"], fontSize=9.5, leading=13, spaceAfter=4)
-    small = ParagraphStyle("AuraSmall", parent=styles["BodyText"], fontSize=8.5, leading=11)
+    normal = ParagraphStyle("AuraNormal", parent=styles["BodyText"], fontSize=9.5, leading=13, spaceAfter=4, alignment=TA_JUSTIFY)
+    small = ParagraphStyle("AuraSmall", parent=styles["BodyText"], fontSize=8.5, leading=11, alignment=TA_LEFT)
 
     elems = []
     elems.append(Paragraph("Reporte AURA", title))
