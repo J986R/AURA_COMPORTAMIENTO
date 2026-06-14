@@ -132,6 +132,7 @@ def crear_tablas():
                     id SERIAL PRIMARY KEY,
                     estudiante_id INTEGER NOT NULL REFERENCES estudiantes(id) ON DELETE CASCADE,
                     nombre_curso TEXT NOT NULL,
+                    codigo_curso TEXT,
                     docente TEXT,
                     creditos INTEGER,
                     dificultad INTEGER,
@@ -173,6 +174,24 @@ def crear_tablas():
                 )
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS horarios_clase (
+                    id SERIAL PRIMARY KEY,
+                    estudiante_id INTEGER NOT NULL REFERENCES estudiantes(id) ON DELETE CASCADE,
+                    curso_id INTEGER REFERENCES cursos(id) ON DELETE CASCADE,
+                    codigo_curso TEXT,
+                    nombre_curso TEXT,
+                    tipo TEXT,
+                    docente TEXT,
+                    dia TEXT NOT NULL,
+                    hora_inicio TIME NOT NULL,
+                    hora_fin TIME NOT NULL,
+                    aula TEXT,
+                    color TEXT,
+                    fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Migraciones para bases creadas con versiones anteriores.
             migraciones = [
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS horas_estudio_dia REAL",
@@ -186,6 +205,8 @@ def crear_tablas():
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS diagnostico_general_ia TEXT",
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS recomendacion_estudiante_ia TEXT",
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS recomendacion_tutoria_ia TEXT",
+                "ALTER TABLE cursos ADD COLUMN IF NOT EXISTS codigo_curso TEXT",
+                "ALTER TABLE horarios_clase ADD COLUMN IF NOT EXISTS color TEXT",
             ]
             for sql in migraciones:
                 cursor.execute(sql)
@@ -480,13 +501,13 @@ def obtener_ultimo_diagnostico_detallado(estudiante_id: int):
     }
 
 
-def registrar_curso(estudiante_id: int, nombre_curso: str, docente: str, creditos: int, dificultad: int, estado: str):
+def registrar_curso(estudiante_id: int, nombre_curso: str, docente: str, creditos: int, dificultad: int, estado: str, codigo_curso: Optional[str] = None):
     _execute(
         """
-        INSERT INTO cursos (estudiante_id, nombre_curso, docente, creditos, dificultad, estado, fecha_registro)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO cursos (estudiante_id, nombre_curso, codigo_curso, docente, creditos, dificultad, estado, fecha_registro)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (estudiante_id, nombre_curso, docente, creditos, dificultad, estado, datetime.now()),
+        (estudiante_id, nombre_curso, codigo_curso, docente, creditos, dificultad, estado, datetime.now()),
     )
 
 
@@ -796,8 +817,137 @@ def obtener_panel_tutoria():
     return normalizadas
 
 
+
+def _color_para_curso(codigo_o_nombre: str) -> str:
+    colores = ["#0B1F4D", "#14B8B8", "#7C3AED", "#2563EB", "#16A34A", "#F59E0B", "#DC2626", "#0891B2"]
+    clave = codigo_o_nombre or "AURA"
+    return colores[sum(ord(c) for c in clave) % len(colores)]
+
+
+def buscar_curso_por_codigo_o_nombre(estudiante_id: int, codigo_curso: Optional[str], nombre_curso: str):
+    if codigo_curso:
+        fila = _fetchone(
+            """
+            SELECT id, nombre_curso, docente, creditos, dificultad, estado
+            FROM cursos
+            WHERE estudiante_id = %s AND codigo_curso = %s
+            LIMIT 1
+            """,
+            (estudiante_id, codigo_curso),
+        )
+        if fila:
+            return fila
+    return _fetchone(
+        """
+        SELECT id, nombre_curso, docente, creditos, dificultad, estado
+        FROM cursos
+        WHERE estudiante_id = %s AND LOWER(nombre_curso) = LOWER(%s)
+        LIMIT 1
+        """,
+        (estudiante_id, nombre_curso),
+    )
+
+
+def obtener_o_crear_curso_boleta(estudiante_id: int, codigo_curso: str, nombre_curso: str, creditos: int = 0, docente: str = ""):
+    nombre_limpio = (nombre_curso or codigo_curso).strip().strip("-")
+    nombre_visible = f"{codigo_curso} - {nombre_limpio}" if codigo_curso and codigo_curso not in nombre_limpio else nombre_limpio
+    fila = buscar_curso_por_codigo_o_nombre(estudiante_id, codigo_curso, nombre_visible)
+    if fila:
+        return fila[0]
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO cursos (estudiante_id, nombre_curso, codigo_curso, docente, creditos, dificultad, estado, fecha_registro)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (estudiante_id, nombre_visible, codigo_curso, docente, int(creditos or 0), 3, "En curso", datetime.now()),
+            )
+            curso_id = cur.fetchone()[0]
+        conn.commit()
+    return curso_id
+
+
+def registrar_horario_clase(estudiante_id: int, curso_id: Optional[int], codigo_curso: str, nombre_curso: str, tipo: str, docente: str, dia: str, hora_inicio: str, hora_fin: str, aula: str, color: Optional[str] = None):
+    color = color or _color_para_curso(codigo_curso or nombre_curso)
+    _execute(
+        """
+        INSERT INTO horarios_clase (estudiante_id, curso_id, codigo_curso, nombre_curso, tipo, docente, dia, hora_inicio, hora_fin, aula, color, fecha_registro)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (estudiante_id, curso_id, codigo_curso, nombre_curso, tipo, docente, dia, hora_inicio, hora_fin, aula, color, datetime.now()),
+    )
+
+
+def limpiar_horarios_clase(estudiante_id: int):
+    _execute("DELETE FROM horarios_clase WHERE estudiante_id = %s", (estudiante_id,))
+    return True
+
+
+def listar_horarios_clase(estudiante_id: int):
+    filas = _fetchall(
+        """
+        SELECT id, curso_id, codigo_curso, nombre_curso, tipo, docente, dia,
+               TO_CHAR(hora_inicio, 'HH24:MI'), TO_CHAR(hora_fin, 'HH24:MI'), aula, color
+        FROM horarios_clase
+        WHERE estudiante_id = %s
+        ORDER BY CASE dia
+            WHEN 'Lunes' THEN 1 WHEN 'Martes' THEN 2 WHEN 'Miércoles' THEN 3 WHEN 'Jueves' THEN 4
+            WHEN 'Viernes' THEN 5 WHEN 'Sábado' THEN 6 WHEN 'Domingo' THEN 7 ELSE 8 END,
+            hora_inicio ASC
+        """,
+        (estudiante_id,),
+    )
+    horarios = []
+    for f in filas:
+        horarios.append({
+            "id": f[0],
+            "curso_id": f[1],
+            "codigo_curso": f[2],
+            "nombre_curso": f[3],
+            "tipo": f[4],
+            "docente": f[5],
+            "dia": f[6],
+            "inicio": f[7],
+            "fin": f[8],
+            "aula": f[9],
+            "color": f[10] or _color_para_curso(f[2] or f[3]),
+        })
+    return horarios
+
+
+def importar_boleta_matricula(estudiante_id: int, cursos: list, horarios: list, reemplazar_horarios: bool = True):
+    if reemplazar_horarios:
+        limpiar_horarios_clase(estudiante_id)
+    mapa_cursos = {}
+    for curso in cursos:
+        codigo = curso.get("codigo_curso") or curso.get("codigo") or ""
+        nombre = curso.get("nombre_curso") or curso.get("nombre") or codigo
+        creditos = int(curso.get("creditos") or 0)
+        curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, nombre, creditos, curso.get("docente", ""))
+        mapa_cursos[codigo] = curso_id
+    for h in horarios:
+        codigo = h.get("codigo_curso") or h.get("codigo") or ""
+        curso_id = mapa_cursos.get(codigo)
+        if not curso_id:
+            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, h.get("nombre_curso") or codigo, 0, h.get("docente", ""))
+        registrar_horario_clase(
+            estudiante_id=estudiante_id,
+            curso_id=curso_id,
+            codigo_curso=codigo,
+            nombre_curso=h.get("nombre_curso") or codigo,
+            tipo=h.get("tipo") or "Clase",
+            docente=h.get("docente") or "",
+            dia=h.get("dia") or "",
+            hora_inicio=h.get("inicio") or h.get("hora_inicio") or "08:00",
+            hora_fin=h.get("fin") or h.get("hora_fin") or "09:00",
+            aula=h.get("aula") or "",
+        )
+    return True, f"Se importaron {len(cursos)} cursos y {len(horarios)} bloques de horario."
+
 def obtener_tabla_completa(tabla: str):
-    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones"}
+    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones", "horarios_clase"}
     if tabla not in permitidas:
         raise ValueError("Tabla no permitida.")
     with conectar() as conn:

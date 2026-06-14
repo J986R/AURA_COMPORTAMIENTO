@@ -26,3 +26,17 @@ GEMINI_MODEL = "gemini-2.5-flash-lite"
 ```text
 app.py
 ```
+
+
+## Versión calendario y boleta
+
+Cambios incluidos:
+- Los estudiantes entran directamente al Dashboard.
+- Se unieron las pestañas **Perfil y Cursos** y **Tareas y Planificador**.
+- Se agregó importación de boleta de matrícula PDF para crear cursos y horarios automáticamente.
+- El planificador usa IA y se visualiza como calendario semanal, evitando cruces con clases.
+- Se agregaron ventanas pequeñas con botones ➕ para crear cursos y tareas.
+- Se agregó tabla `horarios_clase` en Neon.
+- Se agregó `pypdf` en `requirements.txt`.
+
+Recuerda subir todos los archivos nuevos a GitHub, incluido `boleta_parser.py` y `assets/logo_aura.png`.
