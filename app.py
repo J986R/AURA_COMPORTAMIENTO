@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timedelta
 import html
 
 import pandas as pd
@@ -50,7 +50,7 @@ from database import (
     registrar_tarea,
     registrar_usuario,
 )
-from planner import generar_plan_calendario_respaldo
+from planner import generar_plan_calendario_respaldo, dias_restantes_mes
 from report_generator import crear_excel_reporte, crear_pdf_reporte
 
 LOGO_PATH = Path(__file__).parent / "assets" / "logo_aura.png"
@@ -82,7 +82,7 @@ PREGUNTAS_DIAGNOSTICO = [
 
 ESCALA_OPCIONES = ["1 - Nunca", "2 - Casi nunca", "3 - A veces", "4 - Casi siempre", "5 - Siempre"]
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-PALETA = ["#0B1F4D", "#14B8B8", "#7C3AED", "#2563EB", "#16A34A", "#F59E0B", "#DC2626"]
+PALETA = ["#BDE0FE", "#A7F3D0", "#DDD6FE", "#FDE68A", "#FBCFE8", "#BFDBFE", "#C7D2FE"]
 
 
 def aplicar_estilos():
@@ -90,89 +90,101 @@ def aplicar_estilos():
         """
         <style>
         :root{
-            --aura-navy:#0B1F4D;
-            --aura-cyan:#14B8B8;
-            --aura-purple:#7C3AED;
-            --aura-soft:#F4F8FB;
+            --aura-ink:#24324B;
+            --aura-muted:#64748B;
+            --aura-bg:#F7F9FF;
             --aura-card:#FFFFFF;
+            --aura-blue:#BDE0FE;
+            --aura-cyan:#A7F3D0;
+            --aura-purple:#DDD6FE;
+            --aura-yellow:#FDE68A;
+            --aura-pink:#FBCFE8;
+            --aura-accent:#60A5FA;
         }
-        .block-container{padding-top:1.2rem;}
-        h1,h2,h3{letter-spacing:-0.02em;}
-        div[data-testid="stSidebar"]{background:linear-gradient(180deg,#0B1F4D 0%,#102A63 55%,#111827 100%);}
-        div[data-testid="stSidebar"] *{color:white;}
+        html, body, [data-testid="stAppViewContainer"]{
+            background:
+                radial-gradient(circle at top left, rgba(189,224,254,.55), transparent 28%),
+                radial-gradient(circle at top right, rgba(221,214,254,.55), transparent 28%),
+                linear-gradient(180deg,#FBFDFF 0%,#F7F9FF 100%);
+            color:var(--aura-ink);
+        }
+        .block-container{padding-top:1.2rem;max-width:1280px;}
+        h1,h2,h3{letter-spacing:-0.03em;color:var(--aura-ink);}
+        p, label, .stMarkdown{color:var(--aura-ink);}
+        div[data-testid="stSidebar"]{
+            background:linear-gradient(180deg,#F8FBFF 0%,#EEF5FF 55%,#F6F0FF 100%);
+            border-right:1px solid rgba(96,165,250,.18);
+        }
+        div[data-testid="stSidebar"] *{color:#24324B !important;}
         .aura-hero{
-            border-radius:24px;
-            padding:26px 30px;
-            background:linear-gradient(135deg,#0B1F4D 0%,#123A77 52%,#14B8B8 115%);
-            color:white;
-            box-shadow:0 18px 45px rgba(11,31,77,.22);
-            margin-bottom:18px;
+            border-radius:30px;
+            padding:28px 32px;
+            background:linear-gradient(135deg,#BDE0FE 0%,#A7F3D0 48%,#DDD6FE 100%);
+            color:#24324B;
+            box-shadow:0 18px 45px rgba(96,165,250,.18);
+            margin-bottom:20px;
+            border:1px solid rgba(255,255,255,.72);
         }
-        .aura-hero h1{margin:0;font-size:2.1rem;color:white;}
-        .aura-hero p{margin:8px 0 0 0;opacity:.92;}
+        .aura-hero h1{margin:0;font-size:2.15rem;color:#24324B;}
+        .aura-hero p{margin:8px 0 0 0;color:#475569;}
         .aura-card{
-            background:var(--aura-card);
-            border:1px solid rgba(11,31,77,.08);
-            border-radius:20px;
+            background:rgba(255,255,255,.88);
+            backdrop-filter:blur(10px);
+            border:1px solid rgba(148,163,184,.16);
+            border-radius:24px;
             padding:18px 20px;
-            box-shadow:0 8px 24px rgba(11,31,77,.06);
-            margin-bottom:15px;
+            box-shadow:0 10px 30px rgba(96,165,250,.08);
+            margin-bottom:16px;
         }
         .aura-pill{
-            display:inline-flex;
-            align-items:center;
-            border-radius:999px;
-            padding:6px 12px;
-            background:rgba(20,184,184,.12);
-            color:#0B1F4D;
-            font-weight:700;
-            font-size:.88rem;
-            margin-right:8px;
+            display:inline-flex;align-items:center;border-radius:999px;padding:7px 13px;
+            background:rgba(255,255,255,.62);color:#24324B;font-weight:800;font-size:.88rem;margin-right:8px;
+            border:1px solid rgba(96,165,250,.16);
         }
         .stButton > button, .stDownloadButton > button{
-            border-radius:14px !important;
-            border:1px solid rgba(20,184,184,.35) !important;
-            background:linear-gradient(135deg,#0B1F4D,#14B8B8) !important;
-            color:white !important;
-            font-weight:700 !important;
-            padding:.55rem 1rem !important;
-            box-shadow:0 8px 18px rgba(20,184,184,.18);
+            border-radius:16px !important;
+            border:1px solid rgba(96,165,250,.30) !important;
+            background:linear-gradient(135deg,#BDE0FE,#DDD6FE) !important;
+            color:#24324B !important;font-weight:800 !important;padding:.58rem 1.05rem !important;
+            box-shadow:0 8px 18px rgba(96,165,250,.14);
+            transition:all .16s ease-in-out;
         }
-        .stButton > button:hover, .stDownloadButton > button:hover{
-            transform:translateY(-1px);
-            border-color:#7C3AED !important;
-        }
+        .stButton > button:hover, .stDownloadButton > button:hover{transform:translateY(-1px);filter:saturate(1.1);}
         div[data-testid="stMetric"]{
-            background:white;
-            border:1px solid rgba(11,31,77,.08);
-            border-radius:18px;
-            padding:14px 16px;
-            box-shadow:0 6px 18px rgba(11,31,77,.05);
+            background:rgba(255,255,255,.90);border:1px solid rgba(148,163,184,.14);
+            border-radius:22px;padding:14px 16px;box-shadow:0 8px 24px rgba(96,165,250,.08);
+        }
+        div[data-testid="stMetricValue"]{color:#24324B;}
+        div[data-baseweb="select"] > div, div[data-testid="stTextInput"] input, div[data-testid="stNumberInput"] input, textarea{
+            border-radius:14px !important;
         }
         .aura-calendar{
-            background:white;
-            border:1px solid rgba(11,31,77,.10);
-            border-radius:22px;
-            overflow:hidden;
-            box-shadow:0 10px 30px rgba(11,31,77,.07);
+            background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.18);
+            border-radius:26px;overflow:hidden;box-shadow:0 12px 34px rgba(96,165,250,.10);margin-top:10px;
         }
-        .aura-cal-head{display:grid;grid-template-columns:72px repeat(7,1fr);background:#F8FAFC;border-bottom:1px solid #E5E7EB;}
-        .aura-cal-head div{padding:12px 10px;font-weight:800;text-align:center;color:#0B1F4D;}
-        .aura-cal-body{display:grid;grid-template-columns:72px repeat(7,1fr);height:960px;position:relative;}
-        .aura-time-col{background:#F8FAFC;border-right:1px solid #E5E7EB;position:relative;}
-        .aura-time{position:absolute;left:10px;font-size:12px;color:#475569;transform:translateY(-8px);}
+        .aura-cal-head{display:grid;grid-template-columns:78px repeat(7,1fr);background:linear-gradient(90deg,#EFF6FF,#F5F3FF);border-bottom:1px solid #E5E7EB;}
+        .aura-cal-head div{padding:13px 10px;font-weight:900;text-align:center;color:#24324B;}
+        .aura-cal-body{display:grid;grid-template-columns:78px repeat(7,1fr);position:relative;}
+        .aura-time-col{background:#F8FAFF;border-right:1px solid #E5E7EB;position:relative;}
+        .aura-time{position:absolute;left:10px;font-size:12px;color:#64748B;transform:translateY(-8px);}
         .aura-day-col{position:relative;border-right:1px solid #E5E7EB;background-image:linear-gradient(to bottom,#E5E7EB 1px,transparent 1px);background-size:100% 60px;}
         .aura-day-col:last-child{border-right:none;}
-        .aura-event{position:absolute;left:6px;right:6px;border-radius:12px;padding:8px 9px;color:white;font-size:12px;line-height:1.20;overflow:hidden;box-shadow:0 8px 18px rgba(15,23,42,.15);}
-        .aura-event small{display:block;opacity:.95;font-weight:600;margin-top:3px;}
-        .aura-event.clase{background:#0B1F4D;}
-        .aura-event.estudio{background:#14B8B8;}
+        .aura-event{position:absolute;left:6px;right:6px;border-radius:14px;padding:8px 9px;color:#24324B;font-size:12px;line-height:1.20;overflow:hidden;box-shadow:0 8px 18px rgba(15,23,42,.11);border:1px solid rgba(255,255,255,.55);}
+        .aura-event small{display:block;opacity:.86;font-weight:700;margin-top:3px;}
+        .aura-event.clase{background:#BDE0FE;}
+        .aura-event.estudio{background:#A7F3D0;}
+        .aura-event.descanso{background:#FDE68A;}
+        .aura-month{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-top:10px;}
+        .aura-month-head{font-weight:900;text-align:center;color:#24324B;background:#EEF6FF;border-radius:14px;padding:10px;}
+        .aura-month-day{min-height:132px;background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.18);border-radius:18px;padding:10px;box-shadow:0 6px 18px rgba(96,165,250,.07);}
+        .aura-month-day.empty{opacity:.35;background:#F8FAFC;}
+        .aura-day-number{font-weight:900;margin-bottom:6px;color:#24324B;}
+        .aura-month-event{font-size:11px;line-height:1.2;border-radius:10px;padding:5px 6px;margin-bottom:5px;color:#24324B;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(255,255,255,.55);}
         .aura-muted{color:#64748B;font-size:.92rem;}
         </style>
         """,
         unsafe_allow_html=True,
     )
-
 
 @st.cache_resource(show_spinner=False)
 def inicializar_bd():
@@ -307,46 +319,85 @@ def escape(s):
     return html.escape(str(s or ""))
 
 
-def bloques_clase_para_calendar(horarios):
+def fecha_a_dia(fecha_obj):
+    dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    return dias[fecha_obj.weekday()]
+
+
+def rango_fechas(inicio, dias):
+    return [inicio + timedelta(days=i) for i in range(max(1, int(dias)))]
+
+
+def bloques_clase_para_calendar(horarios, fechas=None):
     bloques = []
+    fechas = fechas or []
     for h in horarios or []:
-        bloques.append({
-            "tipo": "Clase",
-            "dia": h.get("dia"),
-            "inicio": h.get("inicio"),
-            "fin": h.get("fin"),
-            "curso": h.get("codigo_curso") or h.get("nombre_curso"),
-            "actividad": f"{h.get('tipo','Clase')} · {h.get('aula','')}",
-            "tarea_origen": h.get("docente", ""),
-            "prioridad": "Clase",
-            "color": h.get("color") or "#0B1F4D",
-        })
+        if fechas:
+            for f in fechas:
+                if fecha_a_dia(f) != h.get("dia"):
+                    continue
+                bloques.append({
+                    "tipo": "Clase",
+                    "fecha": f.isoformat(),
+                    "dia": h.get("dia"),
+                    "inicio": h.get("inicio"),
+                    "fin": h.get("fin"),
+                    "curso": h.get("codigo_curso") or h.get("nombre_curso"),
+                    "actividad": f"{h.get('tipo','Clase')} · {h.get('aula','')}",
+                    "tarea_origen": h.get("docente", ""),
+                    "prioridad": "Clase",
+                    "color": h.get("color") or "#BDE0FE",
+                })
+        else:
+            bloques.append({
+                "tipo": "Clase",
+                "dia": h.get("dia"),
+                "inicio": h.get("inicio"),
+                "fin": h.get("fin"),
+                "curso": h.get("codigo_curso") or h.get("nombre_curso"),
+                "actividad": f"{h.get('tipo','Clase')} · {h.get('aula','')}",
+                "tarea_origen": h.get("docente", ""),
+                "prioridad": "Clase",
+                "color": h.get("color") or "#BDE0FE",
+            })
     return bloques
 
 
-def render_calendario(horarios=None, bloques_estudio=None, titulo="Calendario semanal"):
+def render_calendario(horarios=None, bloques_estudio=None, titulo="Calendario semanal", fecha_inicio=None, horizonte_dias=7):
     horarios = horarios or []
     bloques_estudio = bloques_estudio or []
-    bloques = bloques_clase_para_calendar(horarios) + bloques_estudio
+    fecha_inicio = fecha_inicio or date.today()
+    fechas = rango_fechas(fecha_inicio, horizonte_dias)
+    bloques = bloques_clase_para_calendar(horarios, fechas) + bloques_estudio
     min_hour, max_hour, px_h = 7, 23, 60
     height = (max_hour - min_hour) * px_h
 
-    head = "<div class='aura-cal-head'><div>GMT-05</div>" + "".join([f"<div>{d[:3].upper()}</div>" for d in DIAS]) + "</div>"
+    head_cells = ["<div>GMT-05</div>"]
+    for f in fechas[:7]:
+        head_cells.append(f"<div><small>{fecha_a_dia(f)[:3].upper()}</small><br><b>{f.day}</b></div>")
+    head = "<div class='aura-cal-head'>" + "".join(head_cells) + "</div>"
     time_labels = "".join([f"<div class='aura-time' style='top:{(h-min_hour)*px_h}px'>{h:02d}:00</div>" for h in range(min_hour, max_hour + 1)])
     cols = [f"<div class='aura-time-col'>{time_labels}</div>"]
-    for d in DIAS:
+    for f in fechas[:7]:
+        d = fecha_a_dia(f)
+        f_iso = f.isoformat()
         events = []
         for b in bloques:
-            if b.get("dia") != d:
+            b_fecha = str(b.get("fecha", ""))[:10]
+            if b_fecha:
+                if b_fecha != f_iso:
+                    continue
+            elif b.get("dia") != d:
                 continue
             ini = max(min_hour, time_to_float(b.get("inicio")))
             fin = min(max_hour, time_to_float(b.get("fin")))
             if fin <= ini:
                 fin = ini + 1
             top = (ini - min_hour) * px_h
-            hgt = max(28, (fin - ini) * px_h - 4)
-            color = escape(b.get("color") or ("#0B1F4D" if b.get("tipo") == "Clase" else "#14B8B8"))
-            clase = "clase" if b.get("tipo") == "Clase" else "estudio"
+            hgt = max(30, (fin - ini) * px_h - 4)
+            color = escape(b.get("color") or ("#BDE0FE" if b.get("tipo") == "Clase" else "#A7F3D0"))
+            tipo_lower = str(b.get("tipo", "")).lower()
+            clase = "clase" if "clase" in tipo_lower else ("descanso" if "almuerzo" in tipo_lower or "descanso" in tipo_lower else "estudio")
             titulo_b = escape(b.get("curso", "Actividad"))
             actividad = escape(b.get("actividad", ""))
             hora = f"{escape(b.get('inicio'))} - {escape(b.get('fin'))}"
@@ -360,6 +411,46 @@ def render_calendario(horarios=None, bloques_estudio=None, titulo="Calendario se
     st.subheader(titulo)
     st.markdown(f"<div class='aura-calendar'>{head}{body}</div>", unsafe_allow_html=True)
 
+
+def render_calendario_mensual(horarios=None, bloques_estudio=None, titulo="Calendario mensual", fecha_inicio=None):
+    horarios = horarios or []
+    bloques_estudio = bloques_estudio or []
+    fecha_inicio = fecha_inicio or date.today()
+    primer_dia = date(fecha_inicio.year, fecha_inicio.month, 1)
+    if fecha_inicio.month == 12:
+        siguiente = date(fecha_inicio.year + 1, 1, 1)
+    else:
+        siguiente = date(fecha_inicio.year, fecha_inicio.month + 1, 1)
+    ultimo_dia = siguiente - timedelta(days=1)
+    fechas_mes = rango_fechas(primer_dia, (ultimo_dia - primer_dia).days + 1)
+    bloques_clase = bloques_clase_para_calendar(horarios, fechas_mes)
+    bloques = bloques_clase + (bloques_estudio or [])
+    por_fecha = {}
+    for b in bloques:
+        f = str(b.get("fecha", ""))[:10]
+        if not f:
+            continue
+        por_fecha.setdefault(f, []).append(b)
+
+    st.subheader(titulo)
+    heads = "".join([f"<div class='aura-month-head'>{d[:3]}</div>" for d in DIAS])
+    html_mes = ["<div class='aura-month'>", heads]
+    for _ in range(primer_dia.weekday()):
+        html_mes.append("<div class='aura-month-day empty'></div>")
+    for f in fechas_mes:
+        eventos = por_fecha.get(f.isoformat(), [])
+        eventos = sorted(eventos, key=lambda x: str(x.get("inicio", "00:00")))[:5]
+        ev_html = ""
+        for e in eventos:
+            color = escape(e.get("color") or "#A7F3D0")
+            etiqueta = escape(f"{e.get('inicio','')} {e.get('curso','')} · {e.get('actividad','')}")
+            ev_html += f"<div class='aura-month-event' style='background:{color};'>{etiqueta}</div>"
+        if len(por_fecha.get(f.isoformat(), [])) > 5:
+            ev_html += f"<div class='aura-muted'>+{len(por_fecha[f.isoformat()])-5} más</div>"
+        marca_hoy = " style='outline:2px solid #60A5FA;'" if f == date.today() else ""
+        html_mes.append(f"<div class='aura-month-day'{marca_hoy}><div class='aura-day-number'>{f.day}</div>{ev_html}</div>")
+    html_mes.append("</div>")
+    st.markdown("".join(html_mes), unsafe_allow_html=True)
 
 def inicializar_diagnostico_state(estudiante_id, detalle):
     pref = f"diag_{estudiante_id}_"
@@ -709,11 +800,39 @@ elif menu == "Tareas y Planificador":
             st.info("Aún no hay tareas registradas.")
 
         st.divider()
-        st.subheader("🗓️ Planificador calendario")
+        st.subheader("🗓️ Planificador inteligente")
+        st.caption("El plan parte desde la fecha actual, no asigna tareas después de su vencimiento y evita clases, almuerzo y descanso.")
+
+        vista_plan = st.radio(
+            "Vista del calendario",
+            ["Semanal", "Mensual"],
+            horizontal=True,
+            key=f"vista_plan_{estudiante_id}"
+        )
+        fecha_inicio_plan = date.today()
+        horizonte = 7 if vista_plan == "Semanal" else dias_restantes_mes(fecha_inicio_plan)
+        almuerzo_inicio = "13:00"
+        almuerzo_fin = "14:00"
+
         bloques_guardados = (ultimo_plan or {}).get("plan", []) if ultimo_plan else []
-        render_calendario(horarios, bloques_guardados, "Calendario actual")
+        if vista_plan == "Semanal":
+            render_calendario(
+                horarios,
+                bloques_guardados,
+                f"Calendario semanal desde hoy: {fecha_inicio_plan.strftime('%d/%m/%Y')}",
+                fecha_inicio=fecha_inicio_plan,
+                horizonte_dias=7,
+            )
+        else:
+            render_calendario_mensual(
+                horarios,
+                bloques_guardados,
+                f"Calendario mensual: {fecha_inicio_plan.strftime('%B %Y')}",
+                fecha_inicio=fecha_inicio_plan,
+            )
+
         if ultimo_plan:
-            st.caption(f"Último plan generado: {ultimo_plan.get('fecha')} | Horas: {ultimo_plan.get('horas_disponibles')} h/semana")
+            st.caption(f"Último plan generado: {ultimo_plan.get('fecha')} | Horas base: {ultimo_plan.get('horas_disponibles')} h/semana")
 
         if diagnostico is None:
             st.warning("Registra primero un diagnóstico para personalizar el plan.")
@@ -723,10 +842,27 @@ elif menu == "Tareas y Planificador":
             nombre = obtener_nombre_desde_texto(estudiante_texto)
             horas, promedio, _, estres, motivacion, procrast, puntaje, riesgo, _ = diagnostico
             riesgo = nivel_por_puntaje(puntaje)
-            c1, c2, c3 = st.columns(3)
-            horas_disponibles = c1.number_input("Horas disponibles para estudiar esta semana", 1.0, 80.0, value=float(max(1, horas * 7)), step=1.0)
+
+            c1, c2, c3, c4 = st.columns(4)
+            horas_disponibles = c1.number_input(
+                "Horas disponibles por semana",
+                1.0,
+                80.0,
+                value=float(max(1, horas * 7)),
+                step=1.0,
+                help="El plan mensual escala estas horas según los días restantes del mes."
+            )
             c2.metric("Riesgo", riesgo)
             c3.metric("Tareas activas", len([t for t in tareas_plan if t.get("estado") != "Completada"]))
+            c4.metric("Horizonte", f"{horizonte} días")
+
+            with st.expander("⚙️ Preferencias de planificación"):
+                col_a, col_b, col_c = st.columns(3)
+                almuerzo_inicio = col_a.selectbox("Inicio almuerzo", ["12:00", "12:30", "13:00", "13:30", "14:00"], index=2)
+                almuerzo_fin = col_b.selectbox("Fin almuerzo", ["13:00", "13:30", "14:00", "14:30", "15:00"], index=2)
+                usar_ia = col_c.toggle("Usar IA primero", value=True)
+                st.info("AURA siempre valida la fecha actual y usa un respaldo automático si la IA falla o no hay cuota disponible.")
+
             diag_plan = {
                 "promedio_ponderado": promedio,
                 "nivel_riesgo": riesgo,
@@ -736,19 +872,50 @@ elif menu == "Tareas y Planificador":
                 "indice_motivacion": detalle.get("indice_motivacion") if detalle else motivacion,
                 "indice_estado_animo": detalle.get("indice_estado_animo") if detalle else 3,
             }
-            if st.button("🤖 Generar nuevo calendario con IA"):
-                with st.spinner("AURA está armando tu calendario sin cruzar clases..."):
-                    resultado = generar_plan_calendario_ia(nombre, diag_plan, tareas_plan, horarios, horas_disponibles)
-                if resultado.get("exito"):
-                    bloques = resultado.get("bloques", [])
-                    st.success(resultado.get("recomendacion_general", "Plan generado con IA."))
-                else:
-                    st.error("No se pudo generar con IA. Se usará un plan de respaldo.")
-                    st.code(resultado.get("error", "Error desconocido"))
-                    bloques = generar_plan_calendario_respaldo(tareas_plan, horarios, horas_disponibles, riesgo)
+
+            if st.button("✨ Generar / actualizar calendario inteligente"):
+                bloques = []
+                recomendacion = ""
+                if usar_ia:
+                    with st.spinner("AURA está armando tu calendario con IA y validando fechas límite..."):
+                        resultado = generar_plan_calendario_ia(
+                            nombre,
+                            diag_plan,
+                            tareas_plan,
+                            horarios,
+                            horas_disponibles,
+                            fecha_inicio=fecha_inicio_plan.isoformat(),
+                            horizonte_dias=horizonte,
+                            almuerzo_inicio=almuerzo_inicio,
+                            almuerzo_fin=almuerzo_fin,
+                        )
+                    if resultado.get("exito"):
+                        bloques = resultado.get("bloques", [])
+                        recomendacion = resultado.get("recomendacion_general", "Plan generado con IA.")
+                    else:
+                        st.warning("La IA no pudo generar el calendario. Se usará el planificador automático de respaldo.")
+                        st.code(resultado.get("error", "Error desconocido"))
+
+                if not bloques:
+                    bloques = generar_plan_calendario_respaldo(
+                        tareas_plan,
+                        horarios,
+                        horas_disponibles,
+                        riesgo,
+                        fecha_inicio=fecha_inicio_plan,
+                        horizonte_dias=horizonte,
+                        incluir_descansos=True,
+                        almuerzo_inicio=almuerzo_inicio,
+                        almuerzo_fin=almuerzo_fin,
+                    )
+                    recomendacion = "Plan generado automáticamente respetando clases, almuerzo, dificultad y vencimientos."
+
                 guardar_plan_semanal(estudiante_id, bloques, horas_disponibles)
-                st.success("Plan guardado correctamente.")
-                render_calendario(horarios, bloques, "Nuevo calendario generado")
+                st.success("Plan guardado correctamente. " + recomendacion)
+                if vista_plan == "Semanal":
+                    render_calendario(horarios, bloques, "Nuevo calendario semanal", fecha_inicio=fecha_inicio_plan, horizonte_dias=7)
+                else:
+                    render_calendario_mensual(horarios, bloques, "Nuevo calendario mensual", fecha_inicio=fecha_inicio_plan)
 
 elif menu == "Coach IA":
     st.header("🤖 Coach académico con IA")

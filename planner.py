@@ -1,9 +1,30 @@
-from datetime import datetime
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from calendar import monthrange
+from typing import Any
 
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+DIA_NUM = {d: i for i, d in enumerate(DIAS)}
+COLORES_ESTUDIO = ["#7DD3FC", "#A7F3D0", "#DDD6FE", "#FDE68A", "#FBCFE8", "#BAE6FD", "#C4B5FD", "#BBF7D0"]
 
 
-def _time_to_float(t):
+def normalizar_fecha(valor: Any, default: date | None = None) -> date:
+    if default is None:
+        default = date.today()
+    if isinstance(valor, date):
+        return valor
+    try:
+        return datetime.strptime(str(valor)[:10], "%Y-%m-%d").date()
+    except Exception:
+        return default
+
+
+def dia_de_fecha(fecha: date) -> str:
+    return DIAS[fecha.weekday()]
+
+
+def _time_to_float(t: Any) -> float:
     try:
         h, m = str(t)[:5].split(":")
         return int(h) + int(m) / 60
@@ -11,7 +32,7 @@ def _time_to_float(t):
         return 8.0
 
 
-def _float_to_time(v):
+def _float_to_time(v: float) -> str:
     h = int(v)
     m = int(round((v - h) * 60))
     if m >= 60:
@@ -20,129 +41,277 @@ def _float_to_time(v):
     return f"{h:02d}:{m:02d}"
 
 
-def _se_cruza(a_ini, a_fin, b_ini, b_fin):
+def _se_cruza(a_ini: float, a_fin: float, b_ini: float, b_fin: float) -> bool:
     return max(a_ini, b_ini) < min(a_fin, b_fin)
+
+
+def _rango_fechas(inicio: date, dias: int) -> list[date]:
+    return [inicio + timedelta(days=i) for i in range(max(1, int(dias)))]
+
+
+def dias_restantes_mes(fecha_inicio: date | None = None) -> int:
+    fecha_inicio = fecha_inicio or date.today()
+    ultimo = date(fecha_inicio.year, fecha_inicio.month, monthrange(fecha_inicio.year, fecha_inicio.month)[1])
+    return max(1, (ultimo - fecha_inicio).days + 1)
 
 
 def calcular_puntaje_planificacion(fecha_entrega, prioridad, dificultad, estado):
     if estado == "Completada":
         return 0
-    hoy = datetime.now().date()
-    try:
-        entrega = datetime.strptime(str(fecha_entrega), "%Y-%m-%d").date()
-        dias_restantes = (entrega - hoy).days
-    except Exception:
-        dias_restantes = 30
+    hoy = date.today()
+    entrega = normalizar_fecha(fecha_entrega, hoy + timedelta(days=30))
+    dias_restantes = (entrega - hoy).days
     puntaje = 0
     if dias_restantes < 0:
-        puntaje += 50
+        puntaje += 60
     elif dias_restantes == 0:
-        puntaje += 45
+        puntaje += 55
     elif dias_restantes == 1:
-        puntaje += 40
+        puntaje += 45
     elif dias_restantes <= 3:
-        puntaje += 30
+        puntaje += 35
     elif dias_restantes <= 7:
-        puntaje += 20
+        puntaje += 25
     else:
         puntaje += 10
-    puntaje += {"Alta": 30, "Media": 20, "Baja": 10}.get(prioridad, 15)
+    puntaje += {"Alta": 35, "Media": 22, "Baja": 10}.get(prioridad, 16)
     try:
-        puntaje += int(dificultad or 3) * 5
+        puntaje += int(dificultad or 3) * 8
     except Exception:
-        puntaje += 15
+        puntaje += 24
     if estado == "Pendiente":
         puntaje += 15
     elif estado == "En proceso":
-        puntaje += 8
+        puntaje += 6
     return puntaje
 
 
-def generar_plan_calendario_respaldo(tareas, horarios_clase, horas_disponibles_semana, nivel_riesgo):
-    """Planificador simple de respaldo que no se cruza con clases."""
-    tareas_activas = []
-    for tarea in tareas:
-        if tarea.get("estado") != "Completada":
-            tarea = dict(tarea)
-            tarea["puntaje"] = calcular_puntaje_planificacion(tarea.get("fecha_entrega"), tarea.get("prioridad"), tarea.get("dificultad"), tarea.get("estado"))
-            tareas_activas.append(tarea)
-    tareas_activas.sort(key=lambda x: x["puntaje"], reverse=True)
-    if not tareas_activas:
-        return []
+def estimar_horas_tarea(tarea: dict) -> float:
+    dificultad = int(tarea.get("dificultad") or 3)
+    prioridad = tarea.get("prioridad") or "Media"
+    estado = tarea.get("estado") or "Pendiente"
+    # Mayor dificultad = más horas y más bloques.
+    base_por_dificultad = {1: 1.0, 2: 1.5, 3: 2.25, 4: 3.25, 5: 4.5}
+    horas = base_por_dificultad.get(dificultad, 2.25)
+    if prioridad == "Alta":
+        horas += 1.25
+    elif prioridad == "Media":
+        horas += 0.6
+    if estado == "En proceso":
+        horas *= 0.65
+    entrega = normalizar_fecha(tarea.get("fecha_entrega"), date.today() + timedelta(days=15))
+    dias = (entrega - date.today()).days
+    if dias <= 1:
+        horas += 0.75
+    elif dias <= 3:
+        horas += 0.35
+    return round(min(max(horas, 0.75), 7.0), 2)
 
-    ocupados = {d: [] for d in DIAS}
+
+def construir_ocupados_por_fecha(
+    fechas: list[date],
+    horarios_clase: list[dict] | None,
+    incluir_descansos: bool = True,
+    almuerzo_inicio: str = "13:00",
+    almuerzo_fin: str = "14:00",
+) -> dict[str, list[tuple[float, float, str]]]:
+    ocupados: dict[str, list[tuple[float, float, str]]] = {f.isoformat(): [] for f in fechas}
+    for f in fechas:
+        key = f.isoformat()
+        if incluir_descansos:
+            # No se planifica en madrugada/noche tardía; almuerzo y descanso breve se muestran como ocupados.
+            ocupados[key].append((0.0, 7.0, "Descanso"))
+            ocupados[key].append((_time_to_float(almuerzo_inicio), _time_to_float(almuerzo_fin), "Almuerzo"))
+            ocupados[key].append((23.0, 24.0, "Descanso"))
     for h in horarios_clase or []:
-        d = h.get("dia")
-        if d in ocupados:
-            ocupados[d].append((_time_to_float(h.get("inicio")), _time_to_float(h.get("fin"))))
+        dia = h.get("dia")
+        for f in fechas:
+            if dia_de_fecha(f) == dia:
+                ocupados[f.isoformat()].append((_time_to_float(h.get("inicio")), _time_to_float(h.get("fin")), "Clase"))
+    for key in ocupados:
+        ocupados[key].sort(key=lambda x: x[0])
+    return ocupados
 
-    total_horas = max(1.0, float(horas_disponibles_semana or 7))
-    horas_restantes = total_horas
+
+def bloques_descanso_para_fechas(fechas: list[date], almuerzo_inicio="13:00", almuerzo_fin="14:00") -> list[dict]:
     bloques = []
-    colores = ["#14B8B8", "#7C3AED", "#2563EB", "#16A34A", "#F59E0B", "#DC2626"]
-    tarea_idx = 0
+    for f in fechas:
+        bloques.append({
+            "tipo": "Almuerzo",
+            "fecha": f.isoformat(),
+            "dia": dia_de_fecha(f),
+            "inicio": almuerzo_inicio,
+            "fin": almuerzo_fin,
+            "curso": "Almuerzo",
+            "actividad": "Pausa para almorzar y descansar",
+            "tarea_origen": "Descanso",
+            "prioridad": "Descanso",
+            "color": "#FDE68A",
+        })
+    return bloques
 
-    def buscar_slot(dia, duracion):
-        # Rangos de estudio preferidos: mañana/tarde, evitando madrugada y muy tarde.
-        candidatos = [(8.0, 12.0), (13.0, 16.0), (18.0, 22.0), (20.0, 23.0)]
-        for start_range, end_range in candidatos:
-            t = start_range
-            while t + duracion <= end_range:
-                cruza = False
-                for a, b in ocupados[dia]:
-                    if _se_cruza(t, t + duracion, a, b):
-                        cruza = True
-                        t = b
-                        break
-                if not cruza:
-                    ocupados[dia].append((t, t + duracion))
-                    ocupados[dia].sort()
-                    return t, t + duracion
-                t += 0.5
-        return None
 
-    while horas_restantes > 0.25 and tarea_idx < len(tareas_activas) * 3:
-        tarea = tareas_activas[tarea_idx % len(tareas_activas)]
+def buscar_slot_en_fecha(
+    fecha: date,
+    duracion: float,
+    ocupados: dict[str, list[tuple[float, float, str]]],
+    preferencia_tarde: bool = False,
+) -> tuple[float, float] | None:
+    key = fecha.isoformat()
+    # Rangos recomendados: mañana, tarde y noche temprana. No se usa madrugada ni post 23:00.
+    rangos = [(8.0, 12.5), (14.0, 17.5), (18.0, 22.5)]
+    if preferencia_tarde:
+        rangos = [(14.0, 17.5), (18.0, 22.5), (8.0, 12.5)]
+    for ini_r, fin_r in rangos:
+        t = ini_r
+        while t + duracion <= fin_r + 1e-6:
+            cruza = False
+            for a, b, _ in ocupados.get(key, []):
+                if _se_cruza(t, t + duracion, a, b):
+                    cruza = True
+                    t = max(t + 0.25, b)
+                    break
+            if not cruza:
+                ocupados[key].append((t, t + duracion, "Estudio"))
+                ocupados[key].sort(key=lambda x: x[0])
+                return t, t + duracion
+            t += 0.25
+    return None
+
+
+def generar_plan_calendario_respaldo(
+    tareas: list[dict],
+    horarios_clase: list[dict] | None,
+    horas_disponibles_semana: float,
+    nivel_riesgo: str,
+    fecha_inicio: date | None = None,
+    horizonte_dias: int = 7,
+    incluir_descansos: bool = True,
+    almuerzo_inicio: str = "13:00",
+    almuerzo_fin: str = "14:00",
+) -> list[dict]:
+    """Planificador determinístico: respeta fecha actual, vencimientos, clases y pausas.
+
+    Reglas principales:
+    - Nunca coloca avances después de la fecha de entrega.
+    - Usa fecha_inicio como hoy por defecto.
+    - Cursos más difíciles reciben más horas y bloques.
+    - Bloquea clases, almuerzo y descanso nocturno.
+    """
+    fecha_inicio = fecha_inicio or date.today()
+    fechas = _rango_fechas(fecha_inicio, horizonte_dias)
+    fecha_fin = fechas[-1]
+    ocupados = construir_ocupados_por_fecha(fechas, horarios_clase, incluir_descansos, almuerzo_inicio, almuerzo_fin)
+
+    tareas_activas = []
+    for tarea in tareas or []:
+        if tarea.get("estado") == "Completada":
+            continue
+        t = dict(tarea)
+        entrega = normalizar_fecha(t.get("fecha_entrega"), fecha_inicio + timedelta(days=14))
+        t["fecha_entrega_date"] = entrega
+        t["puntaje"] = calcular_puntaje_planificacion(t.get("fecha_entrega"), t.get("prioridad"), t.get("dificultad"), t.get("estado"))
+        t["horas_estimadas"] = estimar_horas_tarea(t)
+        tareas_activas.append(t)
+
+    tareas_activas.sort(key=lambda x: (x["fecha_entrega_date"], -x["puntaje"]))
+    if not tareas_activas:
+        return bloques_descanso_para_fechas(fechas, almuerzo_inicio, almuerzo_fin) if incluir_descansos else []
+
+    # Horas máximas en horizonte. Para vista mensual escalamos por semanas disponibles.
+    semanas_equiv = max(1.0, horizonte_dias / 7)
+    horas_maximas = max(1.0, float(horas_disponibles_semana or 7) * semanas_equiv)
+    horas_usadas = 0.0
+    bloques: list[dict] = []
+    if incluir_descansos:
+        bloques.extend(bloques_descanso_para_fechas(fechas, almuerzo_inicio, almuerzo_fin))
+
+    for idx, tarea in enumerate(tareas_activas):
+        if horas_usadas >= horas_maximas - 0.1:
+            break
+        entrega = tarea["fecha_entrega_date"]
+        if entrega < fecha_inicio:
+            # Vencida: bloque de recuperación en la primera fecha posible.
+            fechas_validas = [fecha_inicio]
+            vencida = True
+        else:
+            limite = min(entrega, fecha_fin)
+            fechas_validas = [f for f in fechas if fecha_inicio <= f <= limite]
+            vencida = False
+        if not fechas_validas:
+            continue
+
+        horas_objetivo = min(tarea["horas_estimadas"], max(0.0, horas_maximas - horas_usadas))
         dificultad = int(tarea.get("dificultad") or 3)
-        duracion = 1.5 if dificultad >= 4 or tarea.get("prioridad") == "Alta" else 1.0
-        duracion = min(duracion, horas_restantes)
-        asignado = False
-        for dia in DIAS:
-            slot = buscar_slot(dia, duracion)
-            if slot:
+        duracion_base = 1.5 if dificultad >= 4 or tarea.get("prioridad") == "Alta" else 1.0
+        duracion_base = min(2.0, max(0.75, duracion_base))
+        avance = 0
+        horas_asignadas = 0.0
+        # Repartimos desde hoy hasta máximo fecha de entrega. Si vence pronto, se concentra pero no pasa de entrega.
+        ciclo_fechas = fechas_validas[:]
+        while horas_asignadas < horas_objetivo - 0.1 and horas_usadas < horas_maximas - 0.1:
+            progreso = False
+            for f in ciclo_fechas:
+                restante = min(horas_objetivo - horas_asignadas, horas_maximas - horas_usadas)
+                if restante <= 0.1:
+                    break
+                duracion = min(duracion_base, restante)
+                if duracion < 0.5:
+                    duracion = 0.5
+                slot = buscar_slot_en_fecha(f, duracion, ocupados, preferencia_tarde=(dificultad >= 4))
+                if not slot:
+                    continue
                 ini, fin = slot
-                actividad = "Avance principal"
-                if tarea_idx % 3 == 0:
+                avance += 1
+                if vencida:
+                    actividad = "Recuperar tarea vencida y definir entrega urgente"
+                    prioridad = "Alta"
+                    color = "#FCA5A5"
+                elif avance == 1:
                     actividad = "Revisar indicaciones y avanzar primera parte"
-                elif tarea_idx % 3 == 1:
-                    actividad = "Desarrollar contenido o resolver ejercicios"
-                else:
+                    prioridad = tarea.get("prioridad", "Media")
+                    color = COLORES_ESTUDIO[idx % len(COLORES_ESTUDIO)]
+                elif horas_asignadas + duracion >= horas_objetivo - 0.1 or f == entrega:
                     actividad = "Revisar, corregir y dejar listo para entrega"
+                    prioridad = tarea.get("prioridad", "Media")
+                    color = COLORES_ESTUDIO[idx % len(COLORES_ESTUDIO)]
+                else:
+                    actividad = "Desarrollar avance principal de la tarea"
+                    prioridad = tarea.get("prioridad", "Media")
+                    color = COLORES_ESTUDIO[idx % len(COLORES_ESTUDIO)]
                 bloques.append({
                     "tipo": "Estudio",
-                    "dia": dia,
+                    "fecha": f.isoformat(),
+                    "dia": dia_de_fecha(f),
                     "inicio": _float_to_time(ini),
                     "fin": _float_to_time(fin),
                     "curso": tarea.get("curso", "Curso"),
                     "actividad": actividad,
                     "tarea_origen": tarea.get("titulo", "Tarea"),
-                    "prioridad": tarea.get("prioridad", "Media"),
-                    "color": colores[tarea_idx % len(colores)],
+                    "prioridad": prioridad,
+                    "color": color,
+                    "fecha_entrega": entrega.isoformat(),
                 })
-                horas_restantes -= duracion
-                asignado = True
+                horas_asignadas += duracion
+                horas_usadas += duracion
+                progreso = True
+                if horas_asignadas >= horas_objetivo - 0.1:
+                    break
+            if not progreso:
                 break
-        tarea_idx += 1
-        if not asignado:
-            break
     return bloques
 
 
 # Compatibilidad con versiones previas.
 def generar_plan_semanal(tareas, horas_disponibles_semana, nivel_riesgo):
-    bloques = generar_plan_calendario_respaldo(tareas, [], horas_disponibles_semana, nivel_riesgo)
+    bloques = generar_plan_calendario_respaldo(tareas, [], horas_disponibles_semana, nivel_riesgo, date.today(), 7)
     agrupado = []
     for dia in DIAS:
-        tareas_dia = [b for b in bloques if b["dia"] == dia]
-        agrupado.append({"dia": dia, "horas_disponibles": sum((_time_to_float(b["fin"]) - _time_to_float(b["inicio"])) for b in tareas_dia), "recomendacion": "Plan de respaldo generado automáticamente.", "tareas": tareas_dia})
+        tareas_dia = [b for b in bloques if b.get("dia") == dia and b.get("tipo") == "Estudio"]
+        agrupado.append({
+            "dia": dia,
+            "horas_disponibles": sum((_time_to_float(b["fin"]) - _time_to_float(b["inicio"])) for b in tareas_dia),
+            "recomendacion": "Plan generado automáticamente respetando vencimientos y horarios.",
+            "tareas": tareas_dia,
+        })
     return agrupado

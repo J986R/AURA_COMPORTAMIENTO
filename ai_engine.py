@@ -265,22 +265,46 @@ Detalle técnico:
 """
 
 
-def generar_plan_calendario_ia(nombre_estudiante: str, diagnostico: dict, tareas: list, horarios_clase: list, horas_disponibles_semana: float):
+def generar_plan_calendario_ia(
+    nombre_estudiante: str,
+    diagnostico: dict,
+    tareas: list,
+    horarios_clase: list,
+    horas_disponibles_semana: float,
+    fecha_inicio=None,
+    horizonte_dias: int = 7,
+    almuerzo_inicio: str = "13:00",
+    almuerzo_fin: str = "14:00",
+):
+    from datetime import date, timedelta, datetime
+
     tareas_activas = [t for t in tareas if t.get("estado") != "Completada"]
     if not tareas_activas:
-        return {"exito": True, "bloques": []}
+        return {"exito": True, "bloques": [], "recomendacion_general": "No hay tareas activas para planificar."}
+
+    if not fecha_inicio:
+        fecha_inicio = date.today().isoformat()
+    try:
+        fecha_inicio_date = datetime.strptime(str(fecha_inicio)[:10], "%Y-%m-%d").date()
+    except Exception:
+        fecha_inicio_date = date.today()
+        fecha_inicio = fecha_inicio_date.isoformat()
+    fecha_fin = fecha_inicio_date + timedelta(days=max(1, int(horizonte_dias)) - 1)
 
     tareas_texto = json.dumps(tareas_activas, ensure_ascii=False, indent=2)
     horarios_texto = json.dumps(horarios_clase or [], ensure_ascii=False, indent=2)
     prompt = f"""
 Eres AURA, un planificador académico inteligente.
 
-Objetivo: crear un calendario semanal realista para un estudiante universitario.
-Debes asignar bloques de estudio sin cruzarlos con sus clases. Si una tarea es extensa, difícil o de prioridad alta, divídela en varios bloques de estudio durante varios días.
+Objetivo: crear un calendario académico realista desde la fecha actual, evitando clases, almuerzo y descanso.
 
-Datos del estudiante:
-- Nombre: {nombre_estudiante}
-- Horas disponibles para estudiar en la semana: {horas_disponibles_semana}
+Datos clave:
+- Estudiante: {nombre_estudiante}
+- Fecha actual o fecha de inicio del plan: {fecha_inicio}
+- Fecha final del horizonte: {fecha_fin.isoformat()}
+- Horizonte en días: {horizonte_dias}
+- Horas disponibles para estudiar por semana: {horas_disponibles_semana}
+- Almuerzo bloqueado: {almuerzo_inicio} a {almuerzo_fin}
 - Promedio ponderado: {diagnostico.get('promedio_ponderado')}
 - Nivel de riesgo académico: {diagnostico.get('nivel_riesgo')}
 - Puntaje de riesgo: {diagnostico.get('puntaje_riesgo')}/100
@@ -289,29 +313,33 @@ Datos del estudiante:
 - Motivación: {diagnostico.get('indice_motivacion')}/5
 - Estado de ánimo: {diagnostico.get('indice_estado_animo')}/5
 
-Horario de clases del estudiante en JSON:
+Horario de clases en JSON:
 {horarios_texto}
 
 Tareas activas en JSON:
 {tareas_texto}
 
 Reglas obligatorias:
-- Devuelve bloques para una semana, de Lunes a Domingo.
+- Cada bloque debe tener fecha en formato YYYY-MM-DD y debe estar entre {fecha_inicio} y {fecha_fin.isoformat()}.
+- Si una tarea vence el día 16 y hoy es 14, solo puedes asignar actividades los días 14, 15 y máximo 16. Nunca después del vencimiento.
+- Si una tarea ya venció, asigna una actividad urgente en la fecha de inicio y márcala como prioridad Alta.
 - Usa hora en formato HH:MM de 24 horas.
-- No coloques bloques de estudio encima de clases existentes.
-- Evita programar estudio después de las 23:00.
-- Si el estudiante tiene clase de 16:00 a 22:00 en un día, usa horarios libres antes o después con moderación.
-- Una tarea grande puede dividirse en bloques como: investigar, hacer borrador, resolver, revisar, corregir, entregar.
-- No concentres todo en un solo día si puede distribuirse.
-- Total aproximado de horas de estudio no debe superar las horas disponibles de la semana.
-- Cada bloque debe durar entre 30 minutos y 2 horas, salvo repaso ligero.
-- Usa colores coherentes por curso si puedes.
+- No coloques bloques encima de clases existentes.
+- No coloques bloques durante almuerzo ({almuerzo_inicio}-{almuerzo_fin}).
+- Evita programar estudio antes de 07:00 o después de 23:00.
+- Los cursos de dificultad 4 o 5 deben recibir más horas y más anticipación.
+- Una tarea extensa, difícil o de prioridad alta debe dividirse en varios bloques durante varios días cuando haya tiempo.
+- Cada bloque debe durar entre 45 minutos y 2 horas.
+- No concentres todo en un solo día si la fecha de entrega permite distribuirlo.
+- Total aproximado de horas de estudio no debe superar las horas disponibles proporcionales al horizonte.
+- Incluye bloques de descanso o almuerzo solo si ayudan a visualizar el calendario.
 
 Devuelve SOLO JSON válido con este formato:
 {{
   "bloques": [
     {{
       "tipo": "Estudio",
+      "fecha": "YYYY-MM-DD",
       "dia": "Lunes",
       "inicio": "09:00",
       "fin": "10:30",
@@ -319,14 +347,15 @@ Devuelve SOLO JSON válido con este formato:
       "actividad": "Hacer borrador del trabajo",
       "tarea_origen": "Trabajo parcial",
       "prioridad": "Alta",
-      "color": "#14B8B8"
+      "color": "#A7F3D0",
+      "fecha_entrega": "YYYY-MM-DD"
     }}
   ],
   "recomendacion_general": "texto breve"
 }}
 """
     try:
-        contenido = _generar_texto(prompt, temperature=0.25, json_mode=True)
+        contenido = _generar_texto(prompt, temperature=0.2, json_mode=True)
         datos = extraer_json(contenido)
         if datos is None or "bloques" not in datos:
             return {"exito": False, "error": "La IA no devolvió un calendario JSON válido.", "respuesta_original": contenido}
@@ -340,8 +369,17 @@ Devuelve SOLO JSON válido con este formato:
                 dia = "Sábado"
             if dia not in dias_validos:
                 dia = "Lunes"
+            fecha_b = str(b.get("fecha", fecha_inicio))[:10]
+            # Evitar que la IA programe fuera del horizonte.
+            try:
+                fecha_dt = datetime.strptime(fecha_b, "%Y-%m-%d").date()
+                if fecha_dt < fecha_inicio_date or fecha_dt > fecha_fin:
+                    continue
+            except Exception:
+                fecha_b = fecha_inicio
             bloques.append({
                 "tipo": str(b.get("tipo", "Estudio")),
+                "fecha": fecha_b,
                 "dia": dia,
                 "inicio": str(b.get("inicio", "09:00"))[:5],
                 "fin": str(b.get("fin", "10:00"))[:5],
@@ -349,12 +387,12 @@ Devuelve SOLO JSON válido con este formato:
                 "actividad": str(b.get("actividad", "Bloque de estudio")),
                 "tarea_origen": str(b.get("tarea_origen", "")),
                 "prioridad": str(b.get("prioridad", "Media")),
-                "color": str(b.get("color", "#14B8B8")),
+                "color": str(b.get("color", "#A7F3D0")),
+                "fecha_entrega": str(b.get("fecha_entrega", ""))[:10],
             })
-        return {"exito": True, "bloques": bloques, "recomendacion_general": str(datos.get("recomendacion_general", ""))}
+        return {"exito": True, "bloques": bloques, "recomendacion_general": str(datos.get("recomendacion_general", "Plan generado con IA."))}
     except Exception as error:
         return {"exito": False, "error": str(error), "respuesta_original": ""}
-
 
 def generar_plan_semanal_ia(nombre_estudiante: str, diagnostico: dict, tareas: list, horas_disponibles_semana: float):
     # Compatibilidad con versiones anteriores: genera calendario sin horarios de clase.
