@@ -1,74 +1,28 @@
-# AURA WEB
+# AURA WEB corregido
 
-AURA WEB es la versión publicable en internet de AURA.
+Versión Streamlit + Neon PostgreSQL + Gemini API.
 
-## Stack
+## Correcciones incluidas
 
-- Interfaz web: Streamlit
-- Base de datos en la nube: Neon PostgreSQL
-- IA en la nube: Gemini API
-- Reportes: Excel y PDF
+- Menú **Mi perfil** para que los usuarios puedan cambiar usuario, contraseña y datos del estudiante vinculado.
+- Diagnóstico académico carga el último diagnóstico guardado y mantiene horas, promedio y respuestas.
+- Escala 1 a 5 visible en cada respuesta usando etiquetas: Nunca, Casi nunca, A veces, Casi siempre, Siempre.
+- Ventana de cursos con opción de editar curso.
+- Planificador semanal generado con IA para dividir tareas grandes en varios días.
+- Riesgo académico normalizado para evitar contradicciones entre puntaje y nivel.
+- Coach IA instruido para no cambiar el nivel de riesgo mostrado por el sistema.
+- Reportes PDF corregidos con textos largos ajustados y sin superposición.
 
-## Archivos principales
+## Secrets de Streamlit
+
+```toml
+NEON_DATABASE_URL = "postgresql://usuario:password@host.neon.tech/neondb?sslmode=require"
+GEMINI_API_KEY = "TU_API_KEY_DE_GEMINI"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
+```
+
+## Archivo principal
 
 ```text
-AURA_WEB/
-├── app.py
-├── database.py
-├── ai_engine.py
-├── planner.py
-├── report_generator.py
-├── config.py
-├── requirements.txt
-├── .env.example
-└── .streamlit/
-    └── secrets.toml.example
+app.py
 ```
-
-## Ejecución local
-
-1. Crea un archivo `.env` copiando `.env.example`.
-2. Coloca tus claves:
-
-```env
-NEON_DATABASE_URL=postgresql://usuario:password@host.neon.tech/neondb?sslmode=require
-GEMINI_API_KEY=TU_API_KEY_DE_GEMINI
-GEMINI_MODEL=gemini-2.0-flash-lite
-```
-
-3. Instala dependencias:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-4. Ejecuta:
-
-```bash
-streamlit run app.py
-```
-
-## Usuario inicial
-
-```text
-Usuario: admin
-Contraseña: aura123
-```
-
-Al iniciar por primera vez, AURA crea las tablas en Neon y crea el usuario administrador inicial.
-
-## Publicar en Streamlit Community Cloud
-
-1. Crea un repositorio en GitHub.
-2. Sube todos los archivos de `AURA_WEB`.
-3. Entra a Streamlit Community Cloud.
-4. Crea una nueva app seleccionando tu repositorio y `app.py`.
-5. En `Settings > Secrets`, pega el contenido de `.streamlit/secrets.toml.example`, pero con tus claves reales.
-6. Despliega la app.
-
-## Notas importantes
-
-- No subas tu archivo `.env` ni tus claves reales a GitHub.
-- La base de datos es compartida: todos los usuarios ven la misma información según su rol.
-- La IA se ejecuta en Gemini, por eso los usuarios no necesitan instalar Ollama.
-- El diagnóstico IA es referencial y académico, no clínico.
