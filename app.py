@@ -1,11 +1,15 @@
+from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from pathlib import Path
 
-from ai_engine import generar_diagnostico_ia, generar_recomendacion_ia
+from ai_engine import generar_diagnostico_ia, generar_plan_semanal_ia, generar_recomendacion_ia, nivel_por_puntaje
 from database import (
+    actualizar_curso,
     actualizar_estado_tarea,
+    actualizar_estudiante,
+    actualizar_usuario,
     autenticar_usuario,
     crear_tablas,
     eliminar_curso,
@@ -27,6 +31,7 @@ from database import (
     obtener_tabla_completa,
     obtener_ultimo_diagnostico,
     obtener_ultimo_diagnostico_detallado,
+    obtener_usuario_por_id,
     registrar_curso,
     registrar_estudiante,
     registrar_tarea,
@@ -64,6 +69,14 @@ PREGUNTAS_DIAGNOSTICO = [
     ("¿Te has sentido con poca energía o cansancio la mayor parte del día?", "Estado de ánimo"),
     ("¿Te ha costado concentrarte en clases, tareas o estudios?", "Estado de ánimo"),
     ("¿Has sentido que tus problemas académicos o personales son demasiado difíciles de manejar?", "Estado de ánimo / alerta emocional"),
+]
+
+ESCALA_OPCIONES = [
+    "1 - Nunca",
+    "2 - Casi nunca",
+    "3 - A veces",
+    "4 - Casi siempre",
+    "5 - Siempre",
 ]
 
 
@@ -160,6 +173,36 @@ def df_or_info(data, columns, msg="No hay registros."):
     return df
 
 
+def num_a_escala(valor):
+    try:
+        valor = int(valor)
+    except Exception:
+        valor = 3
+    valor = max(1, min(5, valor))
+    return ESCALA_OPCIONES[valor - 1]
+
+
+def escala_a_num(texto):
+    return int(str(texto).split("-")[0].strip())
+
+
+def reset_diagnostico_si_cambia_estudiante(estudiante_id):
+    if st.session_state.get("diagnostico_estudiante_activo") != estudiante_id:
+        for key in list(st.session_state.keys()):
+            if key.startswith("diag_"):
+                del st.session_state[key]
+        st.session_state["diagnostico_estudiante_activo"] = estudiante_id
+
+
+def mostrar_estado_riesgo(nivel, puntaje):
+    if nivel == "Alto":
+        st.error(f"Riesgo académico IA: {nivel} | Puntaje: {puntaje}/100")
+    elif nivel == "Medio":
+        st.warning(f"Riesgo académico IA: {nivel} | Puntaje: {puntaje}/100")
+    else:
+        st.success(f"Riesgo académico IA: {nivel} | Puntaje: {puntaje}/100")
+
+
 safe_init()
 
 if "usuario_logueado" not in st.session_state:
@@ -184,32 +227,92 @@ if st.sidebar.button("Cerrar sesión"):
 
 if rol_actual == "Administrador":
     opciones_menu = [
-        "Inicio", "Registrar estudiante", "Gestión de usuarios", "Diagnóstico académico", "Cursos", "Tareas",
-        "Dashboard estudiante", "Planificador semanal", "Coach IA", "Panel de Tutoría", "Reportes", "Exportar datos"
+        "Inicio",
+        "Mi perfil",
+        "Registrar estudiante",
+        "Gestión de usuarios",
+        "Diagnóstico académico",
+        "Cursos",
+        "Tareas",
+        "Dashboard estudiante",
+        "Planificador semanal",
+        "Coach IA",
+        "Panel de Tutoría",
+        "Reportes",
+        "Exportar datos",
     ]
 elif rol_actual == "Tutor":
-    opciones_menu = ["Inicio", "Dashboard estudiante", "Planificador semanal", "Coach IA", "Panel de Tutoría", "Reportes"]
+    opciones_menu = ["Inicio", "Mi perfil", "Dashboard estudiante", "Planificador semanal", "Coach IA", "Panel de Tutoría", "Reportes"]
 else:
-    opciones_menu = ["Inicio", "Diagnóstico académico", "Cursos", "Tareas", "Dashboard estudiante", "Planificador semanal", "Coach IA", "Reportes"]
+    opciones_menu = ["Inicio", "Mi perfil", "Diagnóstico académico", "Cursos", "Tareas", "Dashboard estudiante", "Planificador semanal", "Coach IA", "Reportes"]
 
 menu = st.sidebar.radio("Menú principal", opciones_menu)
 
-mostrar_logo(180)
+mostrar_logo(170)
 st.title("AURA")
 st.caption("Academic University Recommendation Assistant | Neon PostgreSQL + Gemini IA")
 
 if menu == "Inicio":
     st.header("Bienvenido a AURA")
-    st.write("""
-    AURA es una plataforma web de acompañamiento académico. Ahora usa una base de datos en la nube
-    con Neon PostgreSQL y diagnóstico/recomendaciones con Gemini API.
-    """)
+    st.write(
+        """
+        AURA es una plataforma web de acompañamiento académico. Usa una base de datos en la nube
+        con Neon PostgreSQL y diagnóstico, coaching y planificación con Gemini API.
+        """
+    )
     st.info("Flujo recomendado: registrar estudiante → crear usuario → diagnóstico IA → cursos → tareas → dashboard → planificador → reportes.")
-
     c1, c2, c3 = st.columns(3)
     c1.metric("Base de datos", "Neon")
     c2.metric("IA", "Gemini")
     c3.metric("Modo", "Web")
+
+elif menu == "Mi perfil":
+    st.header("Mi perfil")
+    usuario_db = obtener_usuario_por_id(usuario_actual["id"])
+    if usuario_db is None:
+        st.error("No se encontró información del usuario actual.")
+    else:
+        _, username_db, rol_db, estudiante_id_db, estudiante_nombre = usuario_db
+        st.subheader("Datos de acceso")
+        with st.form("form_actualizar_usuario"):
+            nuevo_username = st.text_input("Nombre de usuario", value=username_db or "")
+            nueva_password = st.text_input("Nueva contraseña (opcional)", type="password", help="Déjalo vacío si no deseas cambiarla.")
+            confirmar_password = st.text_input("Confirmar nueva contraseña", type="password")
+            boton_usuario = st.form_submit_button("Guardar datos de acceso")
+            if boton_usuario:
+                if not nuevo_username.strip():
+                    st.error("El nombre de usuario no puede estar vacío.")
+                elif nueva_password and nueva_password != confirmar_password:
+                    st.error("Las contraseñas no coinciden.")
+                else:
+                    exito, mensaje = actualizar_usuario(usuario_actual["id"], nuevo_username.strip(), nueva_password if nueva_password else None)
+                    if exito:
+                        st.session_state.usuario_logueado["username"] = nuevo_username.strip()
+                        st.success(mensaje)
+                        st.rerun()
+                    else:
+                        st.error(mensaje)
+
+        if estudiante_id_db is not None:
+            estudiante = obtener_estudiante_por_id(estudiante_id_db)
+            if estudiante:
+                st.subheader("Datos del estudiante vinculado")
+                _, nombre, codigo, carrera, ciclo = estudiante
+                with st.form("form_actualizar_estudiante_perfil"):
+                    nuevo_nombre = st.text_input("Nombre completo", value=nombre or "")
+                    nuevo_codigo = st.text_input("Código universitario", value=codigo or "")
+                    nueva_carrera = st.text_input("Carrera", value=carrera or "")
+                    nuevo_ciclo = st.selectbox("Ciclo", [str(i) for i in range(1, 11)], index=max(0, min(9, int(ciclo or 1) - 1)) if str(ciclo or "1").isdigit() else 0)
+                    boton_est = st.form_submit_button("Guardar datos del estudiante")
+                    if boton_est:
+                        if not nuevo_nombre.strip():
+                            st.error("El nombre del estudiante no puede estar vacío.")
+                        else:
+                            actualizar_estudiante(estudiante_id_db, nuevo_nombre.strip(), nuevo_codigo.strip(), nueva_carrera.strip(), nuevo_ciclo)
+                            st.success("Datos del estudiante actualizados correctamente.")
+                            st.rerun()
+        else:
+            st.info("Tu usuario no está vinculado a un estudiante. Puedes cambiar tus datos de acceso, pero no hay datos académicos asociados a este perfil.")
 
 elif menu == "Registrar estudiante":
     st.header("Registro de estudiante")
@@ -232,6 +335,22 @@ elif menu == "Registrar estudiante":
     df_or_info(estudiantes, ["ID", "Nombre", "Código", "Carrera", "Ciclo"], "Aún no hay estudiantes registrados.")
 
     if estudiantes:
+        with st.expander("Editar estudiante"):
+            opciones_editar = {f"{e[1]} | Código: {e[2]} | Ciclo: {e[4]}": e for e in estudiantes}
+            texto = st.selectbox("Selecciona estudiante a editar", list(opciones_editar.keys()))
+            e = opciones_editar[texto]
+            with st.form("form_editar_estudiante_admin"):
+                nombre_e = st.text_input("Nombre", value=e[1] or "")
+                codigo_e = st.text_input("Código", value=e[2] or "")
+                carrera_e = st.text_input("Carrera", value=e[3] or "")
+                ciclo_actual = str(e[4] or "1")
+                idx = [str(i) for i in range(1, 11)].index(ciclo_actual) if ciclo_actual in [str(i) for i in range(1, 11)] else 0
+                ciclo_e = st.selectbox("Ciclo", [str(i) for i in range(1, 11)], index=idx)
+                if st.form_submit_button("Guardar cambios del estudiante"):
+                    actualizar_estudiante(e[0], nombre_e.strip(), codigo_e.strip(), carrera_e.strip(), ciclo_e)
+                    st.success("Estudiante actualizado correctamente.")
+                    st.rerun()
+
         with st.expander("Eliminar estudiante"):
             st.warning("Al eliminar un estudiante también se eliminarán sus diagnósticos, cursos, tareas y usuarios vinculados.")
             opciones = {f"{e[1]} | Código: {e[2]} | Ciclo: {e[4]}": e[0] for e in estudiantes}
@@ -243,7 +362,8 @@ elif menu == "Registrar estudiante":
                 elif confirmar:
                     exito, mensaje = eliminar_estudiante(opciones[texto])
                     st.success(mensaje) if exito else st.error(mensaje)
-                    st.rerun()
+                    if exito:
+                        st.rerun()
                 else:
                     st.error("Debes marcar la confirmación antes de eliminar.")
 
@@ -299,23 +419,54 @@ elif menu == "Diagnóstico académico":
     estudiante_id, estudiante_texto = seleccionar_estudiante()
 
     if estudiante_id is not None:
+        reset_diagnostico_si_cambia_estudiante(estudiante_id)
+        detalle = obtener_ultimo_diagnostico_detallado(estudiante_id)
         nombre_estudiante = obtener_nombre_desde_texto(estudiante_texto)
+
         st.warning("Este diagnóstico es una orientación académica y de bienestar; no es diagnóstico clínico.")
-        st.info("Escala: 1 = Nunca | 2 = Casi nunca | 3 = A veces | 4 = Casi siempre | 5 = Siempre")
+        st.info("En cada pregunta verás la escala completa: 1 Nunca, 2 Casi nunca, 3 A veces, 4 Casi siempre, 5 Siempre.")
+
+        if detalle:
+            st.success(f"Se cargó el último diagnóstico guardado. Fecha: {detalle.get('fecha')}")
+
+        default_horas = float(detalle.get("horas_estudio_dia") or 2.0) if detalle else 2.0
+        default_promedio = float(detalle.get("promedio_ponderado") or 13.0) if detalle else 13.0
+        default_respuestas = detalle.get("respuestas", {}) if detalle else {}
 
         with st.form("form_diagnostico"):
             col_a, col_b = st.columns(2)
             with col_a:
-                horas_estudio_dia = st.number_input("Horas de estudio por día", min_value=0.0, max_value=16.0, value=2.0, step=0.5)
+                horas_estudio_dia = st.number_input(
+                    "Horas de estudio por día",
+                    min_value=0.0,
+                    max_value=16.0,
+                    value=default_horas,
+                    step=0.5,
+                    key="diag_horas",
+                )
             with col_b:
-                promedio_ponderado = st.number_input("Promedio ponderado actual", min_value=0.0, max_value=20.0, value=13.0, step=0.1)
+                promedio_ponderado = st.number_input(
+                    "Promedio ponderado actual",
+                    min_value=0.0,
+                    max_value=20.0,
+                    value=default_promedio,
+                    step=0.1,
+                    key="diag_promedio",
+                )
 
             respuestas = {}
             for dimension in ["Estrés", "Procrastinación", "Motivación", "Estado de ánimo", "Estado de ánimo / alerta emocional"]:
                 st.subheader(dimension)
                 for i, (pregunta, dim) in enumerate(PREGUNTAS_DIAGNOSTICO, start=1):
                     if dim == dimension:
-                        respuestas[i] = st.slider(f"{i}. {pregunta}", 1, 5, 3, key=f"pregunta_{i}")
+                        valor_default = int(default_respuestas.get(i, 3) or 3)
+                        seleccion = st.select_slider(
+                            f"{i}. {pregunta}",
+                            options=ESCALA_OPCIONES,
+                            value=num_a_escala(valor_default),
+                            key=f"diag_p{i}",
+                        )
+                        respuestas[i] = escala_a_num(seleccion)
 
             boton = st.form_submit_button("Generar diagnóstico con IA y guardar")
 
@@ -329,13 +480,9 @@ elif menu == "Diagnóstico académico":
                 if resultado.get("respuesta_original"):
                     st.code(resultado["respuesta_original"])
             else:
+                resultado["nivel_riesgo"] = nivel_por_puntaje(resultado["puntaje_riesgo"])
                 guardar_diagnostico_ia(estudiante_id, horas_estudio_dia, promedio_ponderado, respuestas, resultado)
-                if resultado["nivel_riesgo"] == "Alto":
-                    st.error(f"Riesgo académico IA: {resultado['nivel_riesgo']} | Puntaje: {resultado['puntaje_riesgo']}/100")
-                elif resultado["nivel_riesgo"] == "Medio":
-                    st.warning(f"Riesgo académico IA: {resultado['nivel_riesgo']} | Puntaje: {resultado['puntaje_riesgo']}/100")
-                else:
-                    st.success(f"Riesgo académico IA: {resultado['nivel_riesgo']} | Puntaje: {resultado['puntaje_riesgo']}/100")
+                mostrar_estado_riesgo(resultado["nivel_riesgo"], resultado["puntaje_riesgo"])
 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Estrés", resultado["indice_estres"])
@@ -379,6 +526,29 @@ elif menu == "Cursos":
         df_or_info(cursos, ["ID", "Curso", "Docente", "Créditos", "Dificultad", "Estado"], "Este estudiante aún no tiene cursos registrados.")
 
         if cursos:
+            with st.expander("Editar curso"):
+                opciones = {f"{c[1]} | Docente: {c[2]} | Estado: {c[5]}": c for c in cursos}
+                texto = st.selectbox("Curso a editar", list(opciones.keys()))
+                curso = opciones[texto]
+                with st.form("form_editar_curso"):
+                    nuevo_nombre = st.text_input("Nombre del curso", value=curso[1] or "")
+                    nuevo_docente = st.text_input("Docente", value=curso[2] or "")
+                    cc1, cc2 = st.columns(2)
+                    with cc1:
+                        nuevos_creditos = st.number_input("Créditos", min_value=1, max_value=8, value=int(curso[3] or 3), key="edit_creditos")
+                    with cc2:
+                        nueva_dificultad = st.slider("Dificultad", 1, 5, int(curso[4] or 3), key="edit_dificultad")
+                    estados = ["En curso", "Aprobado", "Desaprobado", "Retirado"]
+                    idx_estado = estados.index(curso[5]) if curso[5] in estados else 0
+                    nuevo_estado = st.selectbox("Estado", estados, index=idx_estado)
+                    if st.form_submit_button("Guardar cambios del curso"):
+                        if not nuevo_nombre.strip():
+                            st.error("El nombre del curso no puede estar vacío.")
+                        else:
+                            actualizar_curso(curso[0], nuevo_nombre.strip(), nuevo_docente.strip(), int(nuevos_creditos), int(nueva_dificultad), nuevo_estado)
+                            st.success("Curso actualizado correctamente.")
+                            st.rerun()
+
             with st.expander("Eliminar curso"):
                 opciones = {f"{c[1]} | Docente: {c[2]} | Estado: {c[5]}": c[0] for c in cursos}
                 texto = st.selectbox("Curso a eliminar", list(opciones.keys()))
@@ -455,6 +625,7 @@ elif menu == "Dashboard estudiante":
             st.warning("Este estudiante aún no tiene diagnóstico registrado.")
         else:
             horas, promedio, _, estres, motivacion, procrastinacion, puntaje, riesgo, fecha = diagnostico
+            riesgo = nivel_por_puntaje(puntaje)
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Horas estudio/día", horas)
             c2.metric("Promedio ponderado", promedio)
@@ -473,10 +644,12 @@ elif menu == "Dashboard estudiante":
             with col1:
                 st.subheader("Indicadores IA")
                 if detalle:
-                    df = pd.DataFrame({
-                        "Indicador": ["Estrés", "Procrastinación", "Motivación", "Estado de ánimo"],
-                        "Nivel": [detalle["indice_estres"], detalle["indice_procrastinacion"], detalle["indice_motivacion"], detalle["indice_estado_animo"]],
-                    })
+                    df = pd.DataFrame(
+                        {
+                            "Indicador": ["Estrés", "Procrastinación", "Motivación", "Estado de ánimo"],
+                            "Nivel": [detalle["indice_estres"], detalle["indice_procrastinacion"], detalle["indice_motivacion"], detalle["indice_estado_animo"]],
+                        }
+                    )
                 else:
                     df = pd.DataFrame({"Indicador": ["Estrés", "Motivación", "Procrastinación"], "Nivel": [estres, motivacion, procrastinacion]})
                 st.plotly_chart(px.bar(df, x="Indicador", y="Nivel", range_y=[0, 5], text="Nivel"), use_container_width=True)
@@ -499,28 +672,56 @@ elif menu == "Dashboard estudiante":
             st.info(f"Último diagnóstico: {fecha}")
 
 elif menu == "Planificador semanal":
-    st.header("Planificador semanal inteligente")
-    estudiante_id, _ = seleccionar_estudiante()
+    st.header("Planificador semanal con IA")
+    estudiante_id, estudiante_texto = seleccionar_estudiante()
     if estudiante_id is not None:
         diagnostico = obtener_ultimo_diagnostico(estudiante_id)
+        detalle = obtener_ultimo_diagnostico_detallado(estudiante_id)
         tareas = listar_tareas_para_planificador(estudiante_id)
         if diagnostico is None:
             st.warning("Este estudiante aún no tiene diagnóstico registrado.")
         elif not tareas:
             st.warning("Este estudiante aún no tiene tareas registradas.")
         else:
-            horas, _, _, _, _, _, _, riesgo, _ = diagnostico
+            nombre = obtener_nombre_desde_texto(estudiante_texto)
+            horas, promedio, _, estres, motivacion, procrast, puntaje, riesgo, _ = diagnostico
+            riesgo = nivel_por_puntaje(puntaje)
             c1, c2, c3 = st.columns(3)
             horas_disponibles = c1.number_input("Horas disponibles esta semana", min_value=1.0, max_value=80.0, value=float(horas * 7), step=1.0)
             c2.metric("Nivel de riesgo", riesgo)
             c3.metric("Tareas activas", len([t for t in tareas if t["estado"] != "Completada"]))
-            if st.button("Generar plan semanal"):
-                plan = generar_plan_semanal(tareas, horas_disponibles, riesgo)
+
+            diag_plan = {
+                "promedio_ponderado": promedio,
+                "nivel_riesgo": riesgo,
+                "puntaje_riesgo": puntaje,
+                "indice_estres": detalle.get("indice_estres") if detalle else estres,
+                "indice_procrastinacion": detalle.get("indice_procrastinacion") if detalle else procrast,
+                "indice_motivacion": detalle.get("indice_motivacion") if detalle else motivacion,
+                "indice_estado_animo": detalle.get("indice_estado_animo") if detalle else 3,
+            }
+
+            if st.button("Generar plan semanal con IA"):
+                with st.spinner("AURA está generando un plan semanal realista con IA..."):
+                    resultado_plan = generar_plan_semanal_ia(nombre, diag_plan, tareas, horas_disponibles)
+                if not resultado_plan.get("exito"):
+                    st.error("No se pudo generar el plan con IA. Se muestra un plan de respaldo.")
+                    st.code(resultado_plan.get("error", "Error desconocido"))
+                    plan = generar_plan_semanal(tareas, horas_disponibles, riesgo)
+                else:
+                    plan = resultado_plan.get("plan", [])
+                    st.success("Plan semanal generado con IA.")
+
                 for dia in plan:
-                    st.subheader(dia["día"])
-                    st.caption(f"Horas disponibles aproximadas: {dia['horas_disponibles']} h")
-                    st.info(dia["recomendacion"])
-                    st.dataframe(pd.DataFrame(dia["tareas"]), use_container_width=True)
+                    st.subheader(dia.get("dia", "Día"))
+                    st.caption(f"Horas disponibles aproximadas: {dia.get('horas_disponibles', 0)} h")
+                    if dia.get("recomendacion"):
+                        st.info(dia.get("recomendacion"))
+                    tareas_dia = dia.get("tareas", [])
+                    if tareas_dia:
+                        st.dataframe(pd.DataFrame(tareas_dia), use_container_width=True)
+                    else:
+                        st.write("Sin actividades asignadas.")
 
 elif menu == "Coach IA":
     st.header("Coach académico con IA")
@@ -534,10 +735,12 @@ elif menu == "Coach IA":
         else:
             nombre = obtener_nombre_desde_texto(estudiante_texto)
             horas, promedio, tareas_pend, estres, motivacion, procrast, puntaje, riesgo, _ = diagnostico
-            c1, c2, c3 = st.columns(3)
+            riesgo = nivel_por_puntaje(puntaje)
+            c1, c2, c3, c4 = st.columns(4)
             c1.metric("Riesgo académico", riesgo)
-            c2.metric("Tareas pendientes", resumen["pendientes"])
-            c3.metric("Alta prioridad", resumen["alta_prioridad"])
+            c2.metric("Puntaje riesgo", f"{puntaje}/100")
+            c3.metric("Tareas pendientes", resumen["pendientes"])
+            c4.metric("Alta prioridad", resumen["alta_prioridad"])
             if st.button("Generar recomendación con IA"):
                 with st.spinner("AURA está generando una recomendación con Gemini..."):
                     rec = generar_recomendacion_ia(nombre, horas, promedio, tareas_pend, estres, motivacion, procrast, puntaje, riesgo, resumen, cursos_dificultad)
@@ -550,11 +753,28 @@ elif menu == "Panel de Tutoría":
     if not datos:
         st.info("Aún no hay estudiantes registrados.")
     else:
-        df = pd.DataFrame(datos, columns=[
-            "ID", "Nombre", "Código", "Carrera", "Ciclo", "Promedio ponderado", "Estrés", "Motivación",
-            "Procrastinación", "Estado de ánimo", "Alerta emocional", "Puntaje riesgo", "Nivel riesgo", "Fecha diagnóstico",
-            "Total tareas", "Tareas pendientes", "Alta prioridad"
-        ])
+        df = pd.DataFrame(
+            datos,
+            columns=[
+                "ID",
+                "Nombre",
+                "Código",
+                "Carrera",
+                "Ciclo",
+                "Promedio ponderado",
+                "Estrés",
+                "Motivación",
+                "Procrastinación",
+                "Estado de ánimo",
+                "Alerta emocional",
+                "Puntaje riesgo",
+                "Nivel riesgo",
+                "Fecha diagnóstico",
+                "Total tareas",
+                "Tareas pendientes",
+                "Alta prioridad",
+            ],
+        )
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total", len(df))
         c2.metric("Riesgo alto", len(df[df["Nivel riesgo"] == "Alto"]))
@@ -632,9 +852,4 @@ elif menu == "Exportar datos":
     columnas, filas = obtener_tabla_completa(tabla)
     df = pd.DataFrame(filas, columns=columnas)
     st.dataframe(df, use_container_width=True)
-    st.download_button(
-        "Descargar CSV",
-        df.to_csv(index=False).encode("utf-8"),
-        file_name=f"aura_{tabla}.csv",
-        mime="text/csv",
-    )
+    st.download_button("Descargar CSV", df.to_csv(index=False).encode("utf-8"), file_name=f"aura_{tabla}.csv", mime="text/csv")
