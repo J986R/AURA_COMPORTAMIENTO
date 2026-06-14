@@ -4,7 +4,6 @@ from datetime import datetime
 def calcular_puntaje_planificacion(fecha_entrega, prioridad, dificultad, estado):
     if estado == "Completada":
         return 0
-
     hoy = datetime.now().date()
     try:
         entrega = datetime.strptime(str(fecha_entrega), "%Y-%m-%d").date()
@@ -33,79 +32,98 @@ def calcular_puntaje_planificacion(fecha_entrega, prioridad, dificultad, estado)
     else:
         puntaje += 10
 
-    puntaje += int(dificultad or 3) * 5
+    try:
+        puntaje += int(dificultad) * 5
+    except Exception:
+        puntaje += 10
 
     if estado == "Pendiente":
         puntaje += 15
     elif estado == "En proceso":
         puntaje += 8
-
     return puntaje
 
 
 def generar_plan_semanal(tareas, horas_disponibles_semana, nivel_riesgo):
-    tareas_activas = []
-    for tarea in tareas:
-        if tarea["estado"] != "Completada":
-            tarea = dict(tarea)
-            tarea["puntaje"] = calcular_puntaje_planificacion(
-                tarea["fecha_entrega"], tarea["prioridad"], tarea["dificultad"], tarea["estado"]
-            )
-            tareas_activas.append(tarea)
-
-    tareas_activas = sorted(tareas_activas, key=lambda x: x["puntaje"], reverse=True)
+    """Plan de respaldo si falla la IA. Distribuye tareas en bloques, no concentra todo en un día."""
     dias_semana = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-    horas_disponibles_semana = float(horas_disponibles_semana or 7)
-    horas_por_dia = round(max(horas_disponibles_semana, 1) / 7, 1)
+    horas_por_dia = max(0.5, round(float(horas_disponibles_semana or 7) / 7, 1))
+
+    activas = []
+    for tarea in tareas:
+        if tarea.get("estado") == "Completada":
+            continue
+        tarea = tarea.copy()
+        tarea["puntaje"] = calcular_puntaje_planificacion(
+            tarea.get("fecha_entrega"), tarea.get("prioridad"), tarea.get("dificultad"), tarea.get("estado")
+        )
+        activas.append(tarea)
+    activas.sort(key=lambda x: x["puntaje"], reverse=True)
 
     if nivel_riesgo == "Alto":
-        recomendacion_base = "Prioriza avance académico fuerte y reduce tareas acumuladas."
-        bloque_base = 1.5
+        recomendacion = "Prioriza avances pequeños y constantes. Evita concentrar todo al final."
     elif nivel_riesgo == "Medio":
-        recomendacion_base = "Mantén constancia y evita acumular pendientes."
-        bloque_base = 1.0
+        recomendacion = "Mantén constancia y reparte las tareas complejas en varios bloques."
     else:
-        recomendacion_base = "Mantén tu ritmo y refuerza los cursos más difíciles."
-        bloque_base = 0.75
+        recomendacion = "Mantén tu ritmo y usa los días libres para repasar o adelantar."
 
     plan = []
-    indice_tarea = 0
-
     for dia in dias_semana:
-        tareas_del_dia = []
-        horas_asignadas = 0
-        while horas_asignadas < horas_por_dia and indice_tarea < len(tareas_activas):
-            tarea = tareas_activas[indice_tarea]
-            horas_tarea = bloque_base
-            if tarea["prioridad"] == "Alta":
-                horas_tarea += 0.5
-            if int(tarea["dificultad"] or 3) >= 4:
-                horas_tarea += 0.5
-            horas_tarea = min(horas_tarea, horas_por_dia)
-            tareas_del_dia.append({
-                "Curso": tarea["curso"],
-                "Actividad": tarea["titulo"],
-                "Prioridad": tarea["prioridad"],
-                "Fecha de entrega": tarea["fecha_entrega"],
-                "Horas recomendadas": horas_tarea,
+        plan.append({"dia": dia, "horas_disponibles": horas_por_dia, "recomendacion": recomendacion, "tareas": []})
+
+    if not activas:
+        for dia in plan:
+            dia["tareas"].append({
+                "curso": "Repaso general",
+                "actividad": "Repasar apuntes, ordenar materiales o adelantar lecturas",
+                "tarea_origen": "-",
+                "prioridad": "Baja",
+                "fecha_entrega": "-",
+                "horas_recomendadas": horas_por_dia,
             })
-            horas_asignadas += horas_tarea
-            indice_tarea += 1
+        return plan
 
-        if not tareas_del_dia:
-            tareas_del_dia.append({
-                "Curso": "Repaso general",
-                "Actividad": "Repasar apuntes, ordenar materiales o adelantar lecturas.",
-                "Prioridad": "Baja",
-                "Fecha de entrega": "-",
-                "Horas recomendadas": horas_por_dia,
+    dia_idx = 0
+    horas_restantes_dia = [horas_por_dia for _ in dias_semana]
+    for tarea in activas:
+        dificultad = int(tarea.get("dificultad") or 3)
+        prioridad = tarea.get("prioridad", "Media")
+        horas_estimadas = 1.0 + dificultad * 0.7
+        if prioridad == "Alta":
+            horas_estimadas += 1.0
+        elif prioridad == "Media":
+            horas_estimadas += 0.5
+
+        while horas_estimadas > 0.05 and dia_idx < 7:
+            disponible = horas_restantes_dia[dia_idx]
+            if disponible <= 0.05:
+                dia_idx += 1
+                continue
+            bloque = min(disponible, horas_estimadas, 1.5)
+            actividad = "Avance de la tarea"
+            if horas_estimadas > bloque:
+                actividad = "Avance parcial: dividir, desarrollar y dejar evidencia"
+            plan[dia_idx]["tareas"].append({
+                "curso": tarea.get("curso", "-"),
+                "actividad": actividad,
+                "tarea_origen": tarea.get("titulo", "-"),
+                "prioridad": prioridad,
+                "fecha_entrega": tarea.get("fecha_entrega", "-"),
+                "horas_recomendadas": round(bloque, 1),
             })
+            horas_restantes_dia[dia_idx] -= bloque
+            horas_estimadas -= bloque
+            if horas_restantes_dia[dia_idx] <= 0.05:
+                dia_idx += 1
 
-        plan.append({
-            "día": dia,
-            "horas_disponibles": horas_por_dia,
-            "recomendacion": recomendacion_base,
-            "tareas": tareas_del_dia,
-        })
-
+    for idx, dia in enumerate(plan):
+        if not dia["tareas"]:
+            dia["tareas"].append({
+                "curso": "Repaso general",
+                "actividad": "Repasar apuntes o adelantar lecturas de cursos difíciles",
+                "tarea_origen": "-",
+                "prioridad": "Baja",
+                "fecha_entrega": "-",
+                "horas_recomendadas": horas_por_dia,
+            })
     return plan

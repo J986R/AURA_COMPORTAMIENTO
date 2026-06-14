@@ -5,5 +5,4 @@ openpyxl
 reportlab
 psycopg[binary]
 python-dotenv
-google-genai
 requests
