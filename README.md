@@ -1,25 +1,65 @@
-# AURA WEB - versión tareas, calendario y UI mejorada
+# AURA WEB - INTRALU, Notas y Calendario
 
-Cambios principales:
+Versión actualizada con:
 
-- Tipos de actividad: Tarea, Monografía, Práctica calificada, Examen parcial y Examen final.
-- El planificador considera el tipo de actividad y la dificultad del curso para asignar más o menos días/horas.
-- Menú reorganizado: Dashboard Estudiante, Diagnóstico Académico, Perfil Académico, Tareas y Planificador, Coach IA y Reportes.
-- Calendario semanal/mensual con estilo similar a Google Calendar.
-- Dashboard con gráficos horizontales más legibles.
-- Botones e interfaz con estilo pastel, redondeado y minimalista.
-- Controles de música opcionales: sube un archivo `assets/background.mp3` para activar el reproductor en la barra lateral.
+- Importación por boleta PDF.
+- Importación desde INTRALU usando credenciales temporales.
+- Extracción de cursos, horarios y notas por curso.
+- Tabla `notas_curso` en Neon.
+- Dashboard con resumen de notas importadas.
+- Planificador semanal y mensual con calendario visual.
+- Interfaz con paleta pastel y botones redondeados.
 
-## Archivos a subir a GitHub
+## Seguridad de credenciales INTRALU
 
-Reemplaza los archivos del repositorio con los de esta carpeta. Mantén tus Secrets de Streamlit:
+AURA no guarda la contraseña del estudiante en Neon ni en variables persistentes. La contraseña solo se usa durante la importación y luego se descarta.
+
+Si INTRALU solicita CAPTCHA, verificación adicional o cambia su estructura, el scraper puede fallar. En ese caso, usa la importación por boleta PDF como respaldo.
+
+## Archivos principales
+
+- `app.py`
+- `database.py`
+- `intralu_scraper.py`
+- `ai_engine.py`
+- `planner.py`
+- `report_generator.py`
+- `boleta_parser.py`
+- `config.py`
+- `requirements.txt`
+
+## Secrets de Streamlit
 
 ```toml
-NEON_DATABASE_URL = "..."
-GEMINI_API_KEY = "..."
+NEON_DATABASE_URL = "postgresql://usuario:password@host.neon.tech/neondb?sslmode=require"
+GEMINI_API_KEY = "TU_API_KEY"
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 ```
 
-## Notas
+## Dependencias nuevas
 
-La app crea automáticamente la columna `tipo_actividad` en la tabla `tareas` si todavía no existe.
+Se agregaron:
+
+```txt
+beautifulsoup4
+lxml
+playwright
+```
+
+Para usarlo localmente, después de instalar requirements ejecuta:
+
+```bash
+python -m playwright install chromium
+```
+
+En Streamlit Cloud, la app intentará instalar Chromium si no existe. Si el servidor no permite instalarlo, la app seguirá funcionando y podrás importar por PDF.
+
+## Despliegue
+
+Sube los archivos al repositorio GitHub, haz commit y reinicia la app en Streamlit Cloud:
+
+```text
+Manage app → Reboot
+```
+
+La app creará automáticamente la tabla `notas_curso` al iniciar.

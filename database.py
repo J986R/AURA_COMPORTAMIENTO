@@ -193,6 +193,24 @@ def crear_tablas():
                 )
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS notas_curso (
+                    id SERIAL PRIMARY KEY,
+                    estudiante_id INTEGER NOT NULL REFERENCES estudiantes(id) ON DELETE CASCADE,
+                    curso_id INTEGER REFERENCES cursos(id) ON DELETE CASCADE,
+                    ciclo TEXT,
+                    codigo_curso TEXT,
+                    nombre_curso TEXT,
+                    tipo_evaluacion TEXT,
+                    nombre_evaluacion TEXT,
+                    nota REAL,
+                    peso REAL,
+                    observacion TEXT,
+                    origen TEXT,
+                    fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # Migraciones para bases creadas con versiones anteriores.
             migraciones = [
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS horas_estudio_dia REAL",
@@ -209,6 +227,9 @@ def crear_tablas():
                 "ALTER TABLE cursos ADD COLUMN IF NOT EXISTS codigo_curso TEXT",
                 "ALTER TABLE tareas ADD COLUMN IF NOT EXISTS tipo_actividad TEXT DEFAULT 'Tarea'",
                 "ALTER TABLE horarios_clase ADD COLUMN IF NOT EXISTS color TEXT",
+                "ALTER TABLE notas_curso ADD COLUMN IF NOT EXISTS peso REAL",
+                "ALTER TABLE notas_curso ADD COLUMN IF NOT EXISTS observacion TEXT",
+                "ALTER TABLE notas_curso ADD COLUMN IF NOT EXISTS origen TEXT",
             ]
             for sql in migraciones:
                 cursor.execute(sql)
@@ -978,8 +999,162 @@ def importar_boleta_matricula(estudiante_id: int, cursos: list, horarios: list, 
         )
     return True, f"Se importaron {len(cursos)} cursos y {len(horarios)} bloques de horario."
 
+
+def limpiar_notas_curso(estudiante_id: int, ciclo: Optional[str] = None):
+    if ciclo:
+        _execute("DELETE FROM notas_curso WHERE estudiante_id = %s AND ciclo = %s", (estudiante_id, ciclo))
+    else:
+        _execute("DELETE FROM notas_curso WHERE estudiante_id = %s", (estudiante_id,))
+    return True
+
+
+def guardar_nota_curso(
+    estudiante_id: int,
+    curso_id: Optional[int],
+    ciclo: str,
+    codigo_curso: str,
+    nombre_curso: str,
+    tipo_evaluacion: str,
+    nombre_evaluacion: str,
+    nota: Optional[float],
+    peso: Optional[float] = None,
+    observacion: str = "",
+    origen: str = "INTRALU",
+):
+    _execute(
+        """
+        INSERT INTO notas_curso (
+            estudiante_id, curso_id, ciclo, codigo_curso, nombre_curso,
+            tipo_evaluacion, nombre_evaluacion, nota, peso, observacion, origen, fecha_registro
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            estudiante_id,
+            curso_id,
+            ciclo,
+            codigo_curso,
+            nombre_curso,
+            tipo_evaluacion,
+            nombre_evaluacion,
+            nota,
+            peso,
+            observacion,
+            origen,
+            datetime.now(),
+        ),
+    )
+    return True
+
+
+def listar_notas_por_estudiante(estudiante_id: int, ciclo: Optional[str] = None):
+    if ciclo:
+        filas = _fetchall(
+            """
+            SELECT id, ciclo, codigo_curso, nombre_curso, tipo_evaluacion,
+                   nombre_evaluacion, nota, peso, observacion, fecha_registro
+            FROM notas_curso
+            WHERE estudiante_id = %s AND ciclo = %s
+            ORDER BY codigo_curso ASC, id ASC
+            """,
+            (estudiante_id, ciclo),
+        )
+    else:
+        filas = _fetchall(
+            """
+            SELECT id, ciclo, codigo_curso, nombre_curso, tipo_evaluacion,
+                   nombre_evaluacion, nota, peso, observacion, fecha_registro
+            FROM notas_curso
+            WHERE estudiante_id = %s
+            ORDER BY fecha_registro DESC, codigo_curso ASC, id ASC
+            """,
+            (estudiante_id,),
+        )
+    return filas
+
+
+def obtener_resumen_notas(estudiante_id: int):
+    filas = _fetchall(
+        """
+        SELECT codigo_curso, nombre_curso, AVG(nota) AS promedio, MIN(nota) AS minima, COUNT(*) AS total
+        FROM notas_curso
+        WHERE estudiante_id = %s AND nota IS NOT NULL
+        GROUP BY codigo_curso, nombre_curso
+        ORDER BY promedio ASC NULLS LAST
+        """,
+        (estudiante_id,),
+    )
+    return filas
+
+
+def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reemplazar_horarios: bool = True, reemplazar_notas: bool = True):
+    """Guarda en Neon el resultado devuelto por intralu_scraper.
+
+    Las credenciales nunca entran a esta función. Solo llegan cursos, horarios y notas ya extraídos.
+    """
+    cursos = datos.get("cursos", []) or []
+    horarios = datos.get("horarios", []) or []
+    notas = datos.get("notas", []) or []
+
+    if reemplazar_horarios:
+        limpiar_horarios_clase(estudiante_id)
+    if reemplazar_notas:
+        limpiar_notas_curso(estudiante_id, ciclo)
+
+    mapa_cursos = {}
+    for curso in cursos:
+        codigo = curso.get("codigo_curso") or curso.get("codigo") or ""
+        nombre = curso.get("nombre_curso") or curso.get("nombre") or codigo
+        creditos = int(curso.get("creditos") or 0)
+        docente = curso.get("docente", "") or ""
+        curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, nombre, creditos, docente)
+        mapa_cursos[codigo] = curso_id
+        if curso.get("codigo"):
+            mapa_cursos[curso.get("codigo")] = curso_id
+
+    for h in horarios:
+        codigo = h.get("codigo_curso") or h.get("codigo") or ""
+        curso_id = mapa_cursos.get(codigo) or mapa_cursos.get(h.get("codigo"))
+        if not curso_id:
+            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, h.get("nombre_curso") or codigo, 0, h.get("docente", ""))
+            mapa_cursos[codigo] = curso_id
+        registrar_horario_clase(
+            estudiante_id=estudiante_id,
+            curso_id=curso_id,
+            codigo_curso=codigo,
+            nombre_curso=h.get("nombre_curso") or codigo,
+            tipo=h.get("tipo") or "Clase",
+            docente=h.get("docente") or "",
+            dia=h.get("dia") or "",
+            hora_inicio=h.get("inicio") or h.get("hora_inicio") or "08:00",
+            hora_fin=h.get("fin") or h.get("hora_fin") or "09:00",
+            aula=h.get("aula") or "",
+        )
+
+    for n in notas:
+        codigo = n.get("codigo_curso") or n.get("codigo") or ""
+        curso_id = mapa_cursos.get(codigo)
+        if not curso_id:
+            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, n.get("nombre_curso") or codigo, 0, "")
+            mapa_cursos[codigo] = curso_id
+        guardar_nota_curso(
+            estudiante_id=estudiante_id,
+            curso_id=curso_id,
+            ciclo=ciclo,
+            codigo_curso=codigo,
+            nombre_curso=n.get("nombre_curso") or codigo,
+            tipo_evaluacion=n.get("tipo_evaluacion") or "Nota",
+            nombre_evaluacion=n.get("nombre_evaluacion") or "Evaluación",
+            nota=n.get("nota"),
+            peso=n.get("peso"),
+            observacion=n.get("observacion") or "",
+            origen=n.get("origen") or "INTRALU",
+        )
+
+    return True, f"Se importaron {len(cursos)} cursos, {len(horarios)} horarios y {len(notas)} notas desde INTRALU."
+
 def obtener_tabla_completa(tabla: str):
-    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones", "horarios_clase"}
+    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones", "horarios_clase", "notas_curso"}
     if tabla not in permitidas:
         raise ValueError("Tabla no permitida.")
     with conectar() as conn:

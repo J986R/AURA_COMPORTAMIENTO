@@ -10,6 +10,7 @@ import streamlit.components.v1 as components
 
 from ai_engine import generar_diagnostico_ia, generar_plan_calendario_ia, generar_recomendacion_ia, nivel_por_puntaje
 from boleta_parser import parsear_boleta_matricula
+from intralu_scraper import importar_cursos_horarios_notas_intralu
 from database import (
     actualizar_curso,
     actualizar_estado_tarea,
@@ -29,16 +30,20 @@ from database import (
     guardar_plan_semanal,
     guardar_recomendacion_coach,
     importar_boleta_matricula,
+    importar_intralu_resultado,
     limpiar_horarios_clase,
+    limpiar_notas_curso,
     listar_cursos_por_estudiante,
     listar_estudiantes,
     listar_horarios_clase,
+    listar_notas_por_estudiante,
     listar_tareas_para_planificador,
     listar_tareas_por_estudiante,
     listar_usuarios,
     obtener_curso_por_id,
     obtener_cursos_mayor_dificultad,
     obtener_estudiante_por_id,
+    obtener_resumen_notas,
     obtener_panel_tutoria,
     obtener_tarea_por_id,
     obtener_tabla_completa,
@@ -776,6 +781,7 @@ elif menu == "Dashboard Estudiante":
         detalle = obtener_ultimo_diagnostico_detallado(estudiante_id)
         resumen = obtener_resumen_tareas(estudiante_id)
         cursos_dificultad = obtener_cursos_mayor_dificultad(estudiante_id)
+        resumen_notas = obtener_resumen_notas(estudiante_id)
         horarios = listar_horarios_clase(estudiante_id)
         ultimo_plan = obtener_ultimo_plan_semanal(estudiante_id)
 
@@ -818,6 +824,27 @@ elif menu == "Dashboard Estudiante":
                     st.plotly_chart(fig_dif, use_container_width=True)
                 else:
                     st.info("Aún no hay cursos registrados.")
+
+            st.divider()
+            st.subheader("Notas importadas desde INTRALU")
+            if resumen_notas:
+                df_notas_dash = pd.DataFrame(resumen_notas, columns=["Código", "Curso", "Promedio", "Nota mínima", "Evaluaciones"])
+                fig_notas = px.bar(
+                    df_notas_dash,
+                    x="Promedio",
+                    y="Curso",
+                    orientation="h",
+                    text="Promedio",
+                    range_x=[0, 20],
+                    color="Promedio",
+                    color_continuous_scale=["#FCA5A5", "#FDE68A", "#A7F3D0"],
+                )
+                fig_notas.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+                fig_notas.update_layout(height=360, margin=dict(l=8, r=36, t=20, b=8), showlegend=False, plot_bgcolor="rgba(255,255,255,0)", paper_bgcolor="rgba(255,255,255,0)")
+                st.plotly_chart(fig_notas, use_container_width=True)
+                st.dataframe(df_notas_dash, use_container_width=True)
+            else:
+                st.info("Aún no hay notas importadas. Puedes importarlas desde INTRALU en Perfil Académico.")
 
             st.divider()
             if detalle:
@@ -886,6 +913,70 @@ elif menu == "Perfil Académico":
             except Exception as error:
                 st.error("No se pudo leer la boleta. Verifica que sea un PDF con texto seleccionable.")
                 st.code(str(error))
+
+        st.divider()
+        st.subheader("🔐 Importar desde INTRALU")
+        st.caption("AURA usa tus credenciales solo durante esta importación. La contraseña no se guarda en Neon ni en la sesión.")
+        with st.expander("Importar cursos, horarios y notas desde alumnos.uni.edu.pe", expanded=False):
+            with st.form("form_intralu_import"):
+                col_intr1, col_intr2, col_intr3 = st.columns([1.1, 1.1, .8])
+                with col_intr1:
+                    intralu_codigo = st.text_input("Código UNI", value=(codigo or "") if estudiante else "")
+                with col_intr2:
+                    intralu_password = st.text_input("Contraseña INTRALU", type="password")
+                with col_intr3:
+                    intralu_ciclo = st.text_input("Ciclo", value="20261")
+                col_chk1, col_chk2 = st.columns(2)
+                with col_chk1:
+                    intralu_reemplazar_horarios = st.checkbox("Reemplazar horarios anteriores", value=True, key="intralu_reemplazar_horarios")
+                with col_chk2:
+                    intralu_reemplazar_notas = st.checkbox("Reemplazar notas del ciclo", value=True, key="intralu_reemplazar_notas")
+                st.info("Si INTRALU solicita CAPTCHA, verificación adicional o cambia su estructura, usa la importación por boleta PDF como respaldo.")
+                importar_intralu = st.form_submit_button("🌐 Importar cursos, horarios y notas")
+
+            if importar_intralu:
+                if not intralu_codigo.strip() or not intralu_password:
+                    st.error("Ingresa tu código UNI y contraseña.")
+                else:
+                    try:
+                        with st.spinner("Conectando con INTRALU e importando información académica..."):
+                            datos_intralu = importar_cursos_horarios_notas_intralu(
+                                intralu_codigo.strip(),
+                                intralu_password,
+                                intralu_ciclo.strip() or "20261",
+                            )
+                        # Borrado defensivo de la variable de contraseña después de usarla.
+                        intralu_password = None
+
+                        exito, msg = importar_intralu_resultado(
+                            estudiante_id,
+                            datos_intralu,
+                            intralu_ciclo.strip() or "20261",
+                            reemplazar_horarios=intralu_reemplazar_horarios,
+                            reemplazar_notas=intralu_reemplazar_notas,
+                        )
+                        if exito:
+                            st.success(msg)
+                            if datos_intralu.get("advertencias"):
+                                for adv in datos_intralu.get("advertencias", []):
+                                    st.warning(adv)
+                            col_prev1, col_prev2, col_prev3 = st.columns(3)
+                            with col_prev1:
+                                st.caption("Cursos detectados")
+                                st.dataframe(pd.DataFrame(datos_intralu.get("cursos", [])), use_container_width=True)
+                            with col_prev2:
+                                st.caption("Horarios detectados")
+                                st.dataframe(pd.DataFrame(datos_intralu.get("horarios", [])), use_container_width=True)
+                            with col_prev3:
+                                st.caption("Notas detectadas")
+                                st.dataframe(pd.DataFrame(datos_intralu.get("notas", [])), use_container_width=True)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    except Exception as error:
+                        intralu_password = None
+                        st.error("No se pudo importar desde INTRALU. Verifica credenciales, conexión o usa la boleta PDF como respaldo.")
+                        st.code(str(error))
 
         st.divider()
         st.subheader("📚 Cursos")
@@ -1029,6 +1120,23 @@ elif menu == "Perfil Académico":
                     st.rerun()
 
         render_calendario(horarios, [], "🗓️ Horario de clases")
+
+        st.divider()
+        st.subheader("📈 Notas importadas")
+        notas = listar_notas_por_estudiante(estudiante_id)
+        if notas:
+            df_notas = pd.DataFrame(
+                notas,
+                columns=["ID", "Ciclo", "Código", "Curso", "Tipo", "Evaluación", "Nota", "Peso", "Observación", "Fecha"],
+            )
+            st.dataframe(df_notas, use_container_width=True)
+            if st.button("🧹 Limpiar notas importadas"):
+                limpiar_notas_curso(estudiante_id)
+                st.warning("Notas eliminadas.")
+                st.rerun()
+        else:
+            st.info("Aún no hay notas importadas desde INTRALU.")
+
         if horarios and st.button("🧹 Limpiar todos los horarios"):
             limpiar_horarios_clase(estudiante_id)
             st.success("Horarios eliminados.")
@@ -1381,7 +1489,7 @@ elif menu == "Reportes":
 
 elif menu == "Exportar datos":
     st.header("📦 Exportar datos")
-    tabla = st.selectbox("Tabla", ["estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "horarios_clase", "planes_semanales", "coach_recomendaciones"])
+    tabla = st.selectbox("Tabla", ["estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "horarios_clase", "notas_curso", "planes_semanales", "coach_recomendaciones"])
     columnas, filas = obtener_tabla_completa(tabla)
     df = pd.DataFrame(filas, columns=columnas)
     st.dataframe(df, use_container_width=True)
