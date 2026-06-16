@@ -1,44 +1,33 @@
-# AURA WEB - INTRALU corregido con avance curricular y horarios reforzados
+# AURA WEB - Horarios de boleta corregidos
 
-Versión actualizada de AURA con integración INTRALU, calendario, diagnóstico académico y planificador.
+Versión corregida para importar desde INTRALU y leer correctamente la boleta de matrícula.
 
-## Cambios de esta versión
+## Corrección principal
 
-1. **Boleta / horarios corregidos**
-   - Se reforzó el parser de boleta para detectar mejor:
-     - nombre del docente,
-     - día de clase,
-     - hora de inicio,
-     - hora de fin,
-     - aula.
-   - Si el PDF/HTML junta filas o columnas, AURA aplica un parser global adicional.
+La importación de horarios ahora reconoce desde la boleta:
 
-2. **Avance curricular como indicador de riesgo**
-   - Se agregó la tabla `avance_curricular`.
-   - El scraper intenta leer el avance curricular desde INTRALU.
-   - Si detecta cursos llevados **3 o más veces**, lo usa como antecedente de riesgo académico.
-   - El diagnóstico IA recibe este indicador y ajusta el puntaje de riesgo.
+- Curso
+- Tipo de clase: teoría, práctica, laboratorio o clase
+- Docente
+- Día
+- Hora de inicio
+- Hora de fin
+- Aula
 
-3. **Notas y actividades**
-   - Se mantiene la lectura de notas actuales.
-   - Práctica 1/2 se clasifica como Práctica calificada.
-   - Monografía 1/2 se clasifica como Monografía.
-   - Parcial y Final se clasifican correctamente.
+El parser fue probado con una boleta UNI 20261 y detecta 7 cursos y 14 bloques de horario.
 
-## Archivos principales actualizados
+## Archivos principales modificados
 
-- `app.py`
-- `database.py`
-- `intralu_scraper.py`
-- `ai_engine.py`
 - `boleta_parser.py`
+- `intralu_scraper.py`
 
-## Despliegue
+## Cómo actualizar
 
-Sube o reemplaza todo el contenido del ZIP en GitHub y luego reinicia la app en Streamlit Cloud.
+Reemplaza estos archivos en GitHub:
 
-La app creará automáticamente la nueva tabla `avance_curricular` al iniciar.
+- `boleta_parser.py`
+- `intralu_scraper.py`
 
-## Seguridad
+También puedes subir todo el ZIP para mantener la versión completa sincronizada.
 
-Las credenciales de INTRALU no se guardan. Solo se usan temporalmente durante la importación.
+Después haz commit y reinicia la app en Streamlit Cloud.

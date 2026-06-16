@@ -29,9 +29,10 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
 try:
-    from boleta_parser import parsear_boleta_matricula
+    from boleta_parser import parsear_boleta_matricula, parsear_boleta_texto
 except Exception:  # pragma: no cover
     parsear_boleta_matricula = None
+    parsear_boleta_texto = None
 
 BASE_URL = "https://alumnos.uni.edu.pe"
 LOGIN_URL = BASE_URL + "/login"
@@ -197,7 +198,12 @@ def html_a_texto(html: str) -> str:
 
 
 def normalizar_documento_texto(documento: Any) -> str:
-    """Convierte PDF/HTML/texto a texto plano."""
+    """Convierte PDF/HTML/texto a texto plano.
+
+    En INTRALU, algunos botones de imprimir no descargan un PDF directo: abren una
+    vista HTML o un visor del navegador. Por eso damos prioridad al texto visible
+    capturado con JavaScript si existe, y luego caemos a PDF/HTML.
+    """
     if documento is None:
         return ""
     if isinstance(documento, bytes):
@@ -208,11 +214,18 @@ def normalizar_documento_texto(documento: Any) -> str:
         except Exception:
             return ""
     if isinstance(documento, dict):
+        texto_directo = documento.get("texto") or ""
+        if texto_directo and len(limpiar_texto(texto_directo)) > 20:
+            return texto_directo
         if documento.get("tipo") == "pdf" and documento.get("data"):
             return bytes_a_texto_pdf(documento["data"])
+        if documento.get("data") and isinstance(documento.get("data"), (bytes, bytearray)):
+            data = bytes(documento.get("data"))
+            if data[:4] == b"%PDF":
+                return bytes_a_texto_pdf(data)
         if documento.get("tipo") == "html":
             return html_a_texto(documento.get("html", ""))
-        return limpiar_texto(documento.get("texto", ""))
+        return limpiar_texto(texto_directo)
     return str(documento)
 
 
@@ -1074,16 +1087,88 @@ def _ir_cursos_matriculados(page, ciclo: str, timeout_ms: int) -> None:
             pass
 
 
-def _capturar_documento_click(page, textos_boton: List[str], nombre: str, timeout_ms: int = 25000) -> Optional[Dict[str, Any]]:
-    """Clic en botón/link y captura PDF descargado, pestaña emergente o HTML actual.
+def _extraer_texto_visible_page(page) -> str:
+    try:
+        return page.evaluate("() => document.body ? document.body.innerText : ''") or ""
+    except Exception:
+        return ""
 
-    Devuelve {tipo: 'pdf', data: bytes} o {tipo: 'html', html: str}.
+
+def _documento_desde_page(page, nombre: str, timeout_ms: int = 25000) -> Optional[Dict[str, Any]]:
+    """Captura la página actual como PDF/HTML/texto visible si corresponde."""
+    try:
+        url = page.url or ""
+        if url and url not in {"about:blank", ""}:
+            try:
+                resp = page.context.request.get(url, timeout=timeout_ms)
+                if resp.ok:
+                    data = resp.body()
+                    content_type = (resp.headers.get("content-type") or "").lower()
+                    if data and (data[:4] == b"%PDF" or "application/pdf" in content_type):
+                        return {"tipo": "pdf", "data": data, "nombre": nombre, "url": url}
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        html = page.content()
+    except Exception:
+        html = ""
+    texto = _extraer_texto_visible_page(page)
+    if html or texto:
+        return {"tipo": "html", "html": html, "texto": texto, "nombre": nombre, "url": getattr(page, "url", "")}
+    return None
+
+
+def _extraer_href_desde_locator(loc) -> str:
+    try:
+        href = loc.get_attribute("href") or ""
+        if href:
+            return href
+    except Exception:
+        pass
+    try:
+        onclick = loc.get_attribute("onclick") or ""
+        m = re.search(r"(?:window\.open|location\.href|location\.assign)\(['\"]([^'\"]+)", onclick, flags=re.I)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def _capturar_documento_click(page, textos_boton: List[str], nombre: str, timeout_ms: int = 25000) -> Optional[Dict[str, Any]]:
+    """Clic en botón/link de impresión y captura PDF, popup, HTML o texto visible.
+
+    Esta versión es más tolerante con INTRALU: algunos botones no descargan un PDF,
+    sino que abren una pestaña, cambian la página actual o muestran una vista imprimible.
     """
-    loc = _click_texto(page, textos_boton, timeout=5000)
+    loc = _click_texto(page, textos_boton, timeout=7000)
     if loc is None:
         return None
 
+    href = _extraer_href_desde_locator(loc)
+    if href:
+        try:
+            url = href if href.startswith("http") else BASE_URL + (href if href.startswith("/") else "/" + href)
+            resp = page.context.request.get(url, timeout=timeout_ms)
+            if resp.ok:
+                data = resp.body()
+                content_type = (resp.headers.get("content-type") or "").lower()
+                if data and (data[:4] == b"%PDF" or "application/pdf" in content_type):
+                    return {"tipo": "pdf", "data": data, "nombre": nombre, "url": url}
+                try:
+                    html = data.decode("utf-8", errors="ignore")
+                except Exception:
+                    html = ""
+                if html:
+                    return {"tipo": "html", "html": html, "texto": html_a_texto(html), "nombre": nombre, "url": url}
+        except Exception:
+            pass
+
     before_pages = list(page.context.pages)
+
     try:
         with page.expect_download(timeout=9000) as download_info:
             loc.click()
@@ -1095,8 +1180,9 @@ def _capturar_documento_click(page, textos_boton: List[str], nombre: str, timeou
     except Exception:
         pass
 
-    # Si el clic abrió una pestaña/popup.
+    # Si el clic abrió una pestaña/popup o una vista imprimible.
     try:
+        time.sleep(0.8)
         after_pages = list(page.context.pages)
         nuevas = [p for p in after_pages if p not in before_pages]
         if nuevas:
@@ -1105,23 +1191,24 @@ def _capturar_documento_click(page, textos_boton: List[str], nombre: str, timeou
                 popup.wait_for_load_state("networkidle", timeout=timeout_ms)
             except Exception:
                 pass
-            html = popup.content()
+            doc = _documento_desde_page(popup, nombre, timeout_ms)
             try:
                 popup.close()
             except Exception:
                 pass
-            return {"tipo": "html", "html": html, "nombre": nombre}
+            if doc:
+                return doc
     except Exception:
         pass
 
-    # El clic puede haber reemplazado la página actual.
+    # El clic puede haber reemplazado la página actual o mostrado contenido imprimible en la misma vista.
     try:
         page.wait_for_load_state("networkidle", timeout=timeout_ms)
     except Exception:
         pass
-    html = page.content()
-    if html:
-        return {"tipo": "html", "html": html, "nombre": nombre}
+    doc = _documento_desde_page(page, nombre, timeout_ms)
+    if doc:
+        return doc
     return None
 
 
@@ -1197,6 +1284,58 @@ def _capturar_avance_curricular(page, timeout_ms: int) -> Optional[Dict[str, Any
     return {"tipo": "html", "html": page.content(), "nombre": "avance_curricular"}
 
 
+def _fusionar_cursos_por_codigo(cursos_a: List[Dict[str, Any]], cursos_b: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    mapa: Dict[str, Dict[str, Any]] = {}
+    for c in (cursos_a or []) + (cursos_b or []):
+        codigo = c.get("codigo_curso") or c.get("codigo") or ""
+        if not codigo:
+            continue
+        cod, sec = separar_codigo_seccion(codigo)
+        visible = codigo_visible(cod, sec)
+        item = dict(c)
+        item["codigo_curso"] = visible
+        item.setdefault("codigo", cod)
+        item.setdefault("seccion", sec)
+        previo = mapa.get(visible, {})
+        combinado = {**previo, **{k: v for k, v in item.items() if v not in (None, "", [])}}
+        mapa[visible] = combinado
+    return list(mapa.values())
+
+
+def _normalizar_horarios_importados(horarios: List[Dict[str, Any]], cursos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cursos_map = {c.get("codigo_curso") or c.get("codigo"): c for c in cursos or []}
+    salida: List[Dict[str, Any]] = []
+    vistos = set()
+    for h in horarios or []:
+        codigo = h.get("codigo_curso") or h.get("codigo") or ""
+        cod, sec = separar_codigo_seccion(codigo)
+        visible = codigo_visible(cod, sec)
+        curso = cursos_map.get(visible) or cursos_map.get(cod) or {}
+        inicio = normalizar_hora(h.get("inicio") or h.get("hora_inicio") or "")
+        fin = normalizar_hora(h.get("fin") or h.get("hora_fin") or "")
+        docente = limpiar_texto(h.get("docente") or curso.get("docente") or "")
+        dia = _normalizar_dia(h.get("dia") or h.get("dia_semana") or "")
+        if not visible or not dia or inicio == "08:00" and not re.search(r"\d", str(h.get("inicio") or h.get("hora_inicio") or "")):
+            continue
+        item = {
+            "codigo_curso": visible,
+            "codigo": cod,
+            "seccion": sec,
+            "nombre_curso": h.get("nombre_curso") or curso.get("nombre_curso") or visible,
+            "tipo": h.get("tipo") or "Clase",
+            "docente": docente,
+            "dia": dia,
+            "inicio": inicio,
+            "fin": fin,
+            "aula": h.get("aula") or "",
+        }
+        key = (item["codigo_curso"], item["tipo"], item["dia"], item["inicio"], item["fin"], item["aula"])
+        if key not in vistos:
+            vistos.add(key)
+            salida.append(item)
+    return salida
+
+
 def _extraer_boleta_documento(documento: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], List[str]]:
     if not documento:
         return [], [], {}, ["No se pudo abrir Imprimir boleta desde INTRALU."]
@@ -1213,38 +1352,68 @@ def _extraer_boleta_documento(documento: Optional[Dict[str, Any]]) -> Tuple[List
             "AURA solo cargará cursos/horarios desde Curso matriculado → Imprimir boleta."
         ]
 
+    texto = normalizar_documento_texto(documento)
+    estudiante = extraer_estudiante_desde_texto(texto)
+    cursos_pdf: List[Dict[str, Any]] = []
+    horarios_pdf: List[Dict[str, Any]] = []
+    adv: List[str] = []
+
+    # 1) Si es PDF real, usar parser especializado.
     try:
         if documento.get("tipo") == "pdf" and parsear_boleta_matricula:
             datos = parsear_boleta_matricula(documento.get("data") or b"")
             estudiante = {
-                "nombre": datos.get("alumno", ""),
-                "codigo": datos.get("codigo_alumno", ""),
-                "carrera": datos.get("especialidad", ""),
+                "nombre": datos.get("alumno", "") or estudiante.get("nombre", ""),
+                "codigo": datos.get("codigo_alumno", "") or estudiante.get("codigo", ""),
+                "carrera": datos.get("especialidad", "") or estudiante.get("carrera", ""),
             }
             cursos_pdf = datos.get("cursos", []) or []
             horarios_pdf = datos.get("horarios", []) or []
-            # Si el parser especializado no detectó horarios/docentes, hacer fallback reforzado.
-            if cursos_pdf and horarios_pdf:
-                return cursos_pdf, horarios_pdf, estudiante, []
-            texto_fallback = datos.get("texto", "") or normalizar_documento_texto(documento)
-            cursos_txt, horarios_txt, adv_txt = extraer_cursos_y_horarios(texto_fallback)
-            if cursos_txt or horarios_txt:
-                # Mantener los datos del parser PDF si eran mejores, pero completar horarios con parser global.
-                mapa = {c.get("codigo_curso") or c.get("codigo"): c for c in cursos_pdf}
-                for c in cursos_txt:
-                    codigo = c.get("codigo_curso") or c.get("codigo")
-                    if codigo not in mapa:
-                        mapa[codigo] = c
-                    else:
-                        mapa[codigo] = {**mapa[codigo], **{k: v for k, v in c.items() if v not in (None, "", [])}}
-                return list(mapa.values()), horarios_pdf or horarios_txt, estudiante, adv_txt
-            return cursos_pdf, horarios_pdf, estudiante, ["Se leyó la boleta, pero no se detectaron horarios; revisa si el formato cambió."]
-    except Exception:
-        # Si falla el parser especializado, usamos texto genérico.
-        pass
-    texto = normalizar_documento_texto(documento)
-    cursos, horarios, adv = extraer_cursos_y_horarios(texto)
-    estudiante = extraer_estudiante_desde_texto(texto)
+            texto = datos.get("texto", "") or texto
+    except Exception as exc:
+        adv.append(f"Se abrió la boleta, pero falló el parser PDF especializado: {exc}")
+
+    # 2) Parser de texto de boleta, tanto para PDF extraído como para vista HTML imprimible.
+    cursos_txt: List[Dict[str, Any]] = []
+    horarios_txt: List[Dict[str, Any]] = []
+    try:
+        if parsear_boleta_texto and texto:
+            datos_txt = parsear_boleta_texto(texto)
+            if datos_txt.get("alumno") or datos_txt.get("codigo_alumno") or datos_txt.get("especialidad"):
+                estudiante = {
+                    "nombre": datos_txt.get("alumno", "") or estudiante.get("nombre", ""),
+                    "codigo": datos_txt.get("codigo_alumno", "") or estudiante.get("codigo", ""),
+                    "carrera": datos_txt.get("especialidad", "") or estudiante.get("carrera", ""),
+                }
+            cursos_txt = datos_txt.get("cursos", []) or []
+            horarios_txt = datos_txt.get("horarios", []) or []
+    except Exception as exc:
+        adv.append(f"Se abrió la boleta, pero falló el parser textual reforzado: {exc}")
+
+    # 3) Parser genérico como último respaldo.
+    cursos_gen, horarios_gen, adv_gen = extraer_cursos_y_horarios(texto)
+    adv.extend(adv_gen or [])
+
+    cursos = _fusionar_cursos_por_codigo(cursos_pdf, cursos_txt)
+    cursos = _fusionar_cursos_por_codigo(cursos, cursos_gen)
+    horarios = _normalizar_horarios_importados((horarios_pdf or []) + (horarios_txt or []) + (horarios_gen or []), cursos)
+
+    # Completar docente principal de cursos con primer horario reconocido.
+    for c in cursos:
+        if not c.get("docente"):
+            for h in horarios:
+                if h.get("codigo_curso") == c.get("codigo_curso") and h.get("docente"):
+                    c["docente"] = h["docente"]
+                    break
+
+    if not cursos:
+        adv.append("Se abrió la boleta, pero no se detectaron cursos de la tabla Ciclo/Curso/Nombre.")
+    if not horarios:
+        adv.append(
+            "Se abrió la boleta, pero no se detectaron bloques de horario. "
+            "Verifica que el documento sea 'Imprimir boleta' y no 'Imprimir notas'."
+        )
+
     return cursos, horarios, estudiante, adv
 
 
