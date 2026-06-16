@@ -1,10 +1,22 @@
-# AURA WEB - INTRALU actualizado
+# AURA WEB - INTRALU corregido
 
-Esta versión actualiza la importación desde INTRALU usando el flujo correcto:
+Esta versión corrige la importación desde INTRALU usando el flujo real:
 
 1. **Cursos y horarios**: `Curso matriculado -> Imprimir boleta`.
 2. **Notas actuales del ciclo**: `Curso matriculado -> Imprimir notas`.
 3. **Historial completo del alumno**: `Fichas académicas -> Avance curricular`.
+
+## Correcciones de esta versión
+
+- La pantalla/documento de notas ya no se carga como si fueran cursos.
+- AURA solo crea cursos y horarios cuando el documento capturado tiene estructura de **boleta de matrícula**.
+- Las notas actuales ya no leen únicamente la columna **Nota**.
+- Ahora se extraen evaluaciones por columna, por ejemplo:
+  - `Práctica 2` -> tipo **Práctica calificada**.
+  - `Monografía 2` -> tipo **Monografía**.
+  - `Parcial` / `EP` -> tipo **Examen parcial**.
+  - `Final` / `EF` -> tipo **Examen final**.
+  - `Nota` / `Promedio` -> tipo **Promedio**.
 
 ## Archivos principales actualizados
 

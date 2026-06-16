@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -152,7 +152,7 @@ def codigo_visible(codigo: str, seccion: str = "") -> str:
 
 def _leer_tablas_html(html: str) -> List[pd.DataFrame]:
     try:
-        return pd.read_html(html)
+        return pd.read_html(StringIO(html or ""))
     except Exception:
         return []
 
@@ -212,6 +212,38 @@ def normalizar_documento_texto(documento: Any) -> str:
             return html_a_texto(documento.get("html", ""))
         return limpiar_texto(documento.get("texto", ""))
     return str(documento)
+
+
+def _texto_validacion(documento: Any) -> str:
+    texto = normalizar_documento_texto(documento)
+    texto = texto.upper()
+    texto = texto.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def es_boleta_matricula(documento: Any) -> bool:
+    """Distingue una boleta real de la pantalla o documento de notas.
+
+    Esto evita el error detectado por el usuario: que el bloque de notas
+    sea interpretado como cursos. Solo aceptamos como cursos/horarios el
+    documento de INTRALU generado por Curso matriculado -> Imprimir boleta.
+    """
+    texto = _texto_validacion(documento)
+    if not texto:
+        return False
+    return (
+        ("BOLETA" in texto and ("MATRICULA" in texto or "MATRÍCULA" in texto))
+        or ("CICLO CURSO NOMBRE" in texto and ("CREDITOS" in texto or "CRÉDITOS" in texto) and "VECES" in texto)
+        or ("CURSO TIPO DOCENTE" in texto and "AULA" in texto and "HORA" in texto)
+    )
+
+
+def es_documento_notas(documento: Any) -> bool:
+    texto = _texto_validacion(documento)
+    if not texto:
+        return False
+    claves = ["NOTA", "NOTAS", "PARCIAL", "FINAL", "PRACTICA", "PRÁCTICA", "MONOGRAFIA", "MONOGRAFÍA"]
+    return any(c.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U") in texto for c in claves)
 
 
 def extraer_estudiante_desde_texto(texto: str) -> Dict[str, Any]:
@@ -378,15 +410,80 @@ def extraer_cursos_y_horarios(html_o_texto: str) -> Tuple[List[Dict[str, Any]], 
     return list(cursos.values()), horarios, advertencias
 
 
+def _sin_tildes(texto: str) -> str:
+    return (texto or "").upper().replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
+
+
+def _nombre_columna(col: Any) -> str:
+    if isinstance(col, tuple):
+        partes = [limpiar_texto(x) for x in col if limpiar_texto(x) and not str(x).startswith("Unnamed")]
+        return limpiar_texto(" ".join(partes))
+    return limpiar_texto(col)
+
+
 def inferir_tipo_evaluacion(nombre: str) -> str:
-    t = limpiar_texto(nombre).upper()
+    t = _sin_tildes(limpiar_texto(nombre))
+
+    # Relación pedida: "Práctica 2" debe ser Práctica calificada,
+    # "Monografía 2" debe ser Monografía. Parcial y Final ya se mantienen.
+    if re.search(r"\b(EXAMEN\s+FINAL|FINAL|EF)\b", t):
+        return "Examen final"
+    if re.search(r"\b(EXAMEN\s+PARCIAL|PARCIAL|EP)\b", t):
+        return "Examen parcial"
+    if re.search(r"\b(PRACTICA(?:\s+CALIFICADA)?\s*\d*|PC\s*\d+|PR\s*\d+)\b", t):
+        return "Práctica calificada"
+    if re.search(r"\b(MONOGRAFIA\s*\d*|MONO\s*\d*)\b", t):
+        return "Monografía"
+    if re.search(r"\b(PROMEDIO|PROM|NOTA\s+FINAL|NOTA)\b", t):
+        return "Promedio"
+
     for token, tipo in TIPOS_NOTA.items():
-        if token in t:
+        if _sin_tildes(token) in t:
             return tipo
     return "Nota"
 
 
+def normalizar_nombre_evaluacion(nombre: Any) -> str:
+    n = limpiar_texto(_nombre_columna(nombre))
+    n = re.sub(r"\bUnnamed:\s*\d+\b", "", n, flags=re.I).strip(" -:_")
+    if not n:
+        return "Evaluación"
+    # Hacer más legibles etiquetas frecuentes sin perder el número.
+    repl = {
+        "PRACTICA": "Práctica",
+        "PRACTICA CALIFICADA": "Práctica calificada",
+        "MONOGRAFIA": "Monografía",
+        "EXAMEN PARCIAL": "Examen parcial",
+        "EXAMEN FINAL": "Examen final",
+    }
+    up = _sin_tildes(n)
+    for a, b in repl.items():
+        if up.startswith(a):
+            return re.sub(a, b, up, count=1, flags=re.I).capitalize() if up == a else b + n[len(a):]
+    return n
+
+
+def es_columna_evaluacion(col: Any) -> bool:
+    n = _sin_tildes(_nombre_columna(col))
+    if not n or n in {"NAN", "NONE"}:
+        return False
+    # No confundir campos administrativos con evaluaciones.
+    if any(x in n for x in ["CODIGO", "CURSO", "ASIGNATURA", "NOMBRE", "DOCENTE", "CREDITO", "CICLO", "VEZ", "AULA", "DIA", "HORA"]):
+        return False
+    return bool(re.search(
+        r"\b(PRACTICA(?:\s+CALIFICADA)?\s*\d*|PC\s*\d+|PR\s*\d+|MONOGRAFIA\s*\d*|MONO\s*\d*|EP|EF|PARCIAL|FINAL|PROMEDIO|PROM|NOTA)\b",
+        n,
+    ))
+
+
 def extraer_notas_de_tablas_html(html: str, ciclo_hint: str = "", origen: str = "INTRALU") -> List[Dict[str, Any]]:
+    """Extrae notas desde tablas HTML en formato largo o ancho.
+
+    Corrección clave:
+    - Antes se leía casi siempre solo la columna "Nota".
+    - Ahora se leen todas las columnas de evaluación: Práctica 1/2, Monografía 1/2,
+      Parcial, Final, Promedio/Nota, etc.
+    """
     notas: List[Dict[str, Any]] = []
     tablas = _leer_tablas_html(html)
     curso_actual = ""
@@ -395,93 +492,144 @@ def extraer_notas_de_tablas_html(html: str, ciclo_hint: str = "", origen: str = 
     for idx_tabla, df in enumerate(tablas):
         if df.empty:
             continue
+
+        # Limpiar columnas multiíndice o Unnamed.
+        df = df.copy()
+        df.columns = [_nombre_columna(c) for c in df.columns]
         mapping = _columnas_norm(df)
-        col_codigo = _col(mapping, "codigo", "código", "curso")
-        col_curso = _col(mapping, "asignatura", "nombre", "curso")
+
+        col_codigo = _col(mapping, "codigo", "código", "cod", "curso")
+        col_curso = _col(mapping, "asignatura", "nombre curso", "nombre", "curso")
         col_ciclo = _col(mapping, "ciclo", "periodo", "período", "semestre")
-        col_eval = _col(mapping, "evaluacion", "evaluación", "descripcion", "descripción", "nombre", "concepto", "tipo")
+        col_eval = _col(mapping, "evaluacion", "evaluación", "descripcion", "descripción", "concepto", "tipo")
         col_nota = _col(mapping, "nota", "calificacion", "calificación", "puntaje")
         col_peso = _col(mapping, "peso", "porcentaje", "%")
         col_obs = _col(mapping, "observacion", "observación", "estado")
 
-        if not col_nota:
-            for col in df.columns:
-                valores = [normalizar_decimal(v) for v in df[col].tolist()]
-                validos = [v for v in valores if v is not None and 0 <= v <= 20]
-                if validos and len(validos) >= max(1, len(df) // 3):
-                    col_nota = col
-                    break
+        campos_base = {x for x in [col_codigo, col_curso, col_ciclo, col_peso, col_obs] if x}
 
-        if not col_nota:
-            continue
-
-        for i, row in df.iterrows():
-            nota = normalizar_decimal(row.get(col_nota, None))
-            if nota is None or nota < 0 or nota > 20:
+        # 1) FORMATO ANCHO: una fila por curso y varias columnas de evaluaciones.
+        # Ej: Curso | Práctica 1 | Práctica 2 | Monografía 2 | Parcial | Final | Nota
+        columnas_eval = []
+        for col in df.columns:
+            if col in campos_base:
                 continue
-            cod_raw = limpiar_texto(row.get(col_codigo, "")) if col_codigo else ""
-            codigo, seccion = separar_codigo_seccion(cod_raw) if cod_raw else ("", "")
-            codigo_final = codigo_visible(codigo, seccion) if codigo else curso_actual
-            if codigo_final:
-                curso_actual = codigo_final
-            nombre = limpiar_texto(row.get(col_curso, "")) if col_curso else nombre_actual
-            if nombre and not re.fullmatch(r"[A-Z]{2}\d{3}[-/]?[A-Z]?", nombre, flags=re.I):
-                nombre_actual = nombre
-            evaluacion = limpiar_texto(row.get(col_eval, "")) if col_eval else f"Evaluación {i + 1}"
-            if not evaluacion:
-                evaluacion = f"Evaluación {i + 1}"
-            notas.append({
-                "ciclo": limpiar_texto(row.get(col_ciclo, "")) if col_ciclo else ciclo_hint,
-                "codigo_curso": codigo_final or "SIN-CODIGO",
-                "nombre_curso": nombre_actual or codigo_final or "Curso",
-                "tipo_evaluacion": inferir_tipo_evaluacion(evaluacion),
-                "nombre_evaluacion": evaluacion,
-                "nota": nota,
-                "peso": normalizar_decimal(row.get(col_peso, None)) if col_peso else None,
-                "observacion": limpiar_texto(row.get(col_obs, "")) if col_obs else "",
-                "origen": f"{origen}:tabla_{idx_tabla + 1}",
-            })
-    return notas
+            if es_columna_evaluacion(col):
+                columnas_eval.append(col)
 
+        if columnas_eval:
+            for _, row in df.iterrows():
+                cod_raw = limpiar_texto(row.get(col_codigo, "")) if col_codigo else ""
+                codigo, seccion = separar_codigo_seccion(cod_raw) if cod_raw else ("", "")
+                codigo_final = codigo_visible(codigo, seccion) if codigo else curso_actual
+                if codigo_final:
+                    curso_actual = codigo_final
+
+                nombre = limpiar_texto(row.get(col_curso, "")) if col_curso else nombre_actual
+                # Evitar que el nombre sea igual a una etiqueta de evaluación.
+                if nombre and not es_columna_evaluacion(nombre) and not re.fullmatch(r"[A-Z]{2}\d{3}[-/]?[A-Z]?", nombre, flags=re.I):
+                    nombre_actual = nombre
+
+                ciclo_fila = limpiar_texto(row.get(col_ciclo, "")) if col_ciclo else ciclo_hint
+
+                for col_eval_ancha in columnas_eval:
+                    nota = normalizar_decimal(row.get(col_eval_ancha, None))
+                    if nota is None or nota < 0 or nota > 20:
+                        continue
+                    evaluacion = normalizar_nombre_evaluacion(col_eval_ancha)
+                    notas.append({
+                        "ciclo": ciclo_fila or ciclo_hint,
+                        "codigo_curso": codigo_final or "SIN-CODIGO",
+                        "nombre_curso": nombre_actual or codigo_final or "Curso",
+                        "tipo_evaluacion": inferir_tipo_evaluacion(evaluacion),
+                        "nombre_evaluacion": evaluacion,
+                        "nota": nota,
+                        "peso": None,
+                        "observacion": limpiar_texto(row.get(col_obs, "")) if col_obs else "",
+                        "origen": f"{origen}:tabla_{idx_tabla + 1}",
+                    })
+
+        # 2) FORMATO LARGO: una fila por evaluación.
+        # Ej: Curso | Evaluación | Nota.
+        if col_nota and col_eval:
+            for i, row in df.iterrows():
+                nota = normalizar_decimal(row.get(col_nota, None))
+                if nota is None or nota < 0 or nota > 20:
+                    continue
+                cod_raw = limpiar_texto(row.get(col_codigo, "")) if col_codigo else ""
+                codigo, seccion = separar_codigo_seccion(cod_raw) if cod_raw else ("", "")
+                codigo_final = codigo_visible(codigo, seccion) if codigo else curso_actual
+                if codigo_final:
+                    curso_actual = codigo_final
+                nombre = limpiar_texto(row.get(col_curso, "")) if col_curso else nombre_actual
+                if nombre and not es_columna_evaluacion(nombre) and not re.fullmatch(r"[A-Z]{2}\d{3}[-/]?[A-Z]?", nombre, flags=re.I):
+                    nombre_actual = nombre
+                evaluacion = limpiar_texto(row.get(col_eval, "")) or f"Evaluación {i + 1}"
+                notas.append({
+                    "ciclo": limpiar_texto(row.get(col_ciclo, "")) if col_ciclo else ciclo_hint,
+                    "codigo_curso": codigo_final or "SIN-CODIGO",
+                    "nombre_curso": nombre_actual or codigo_final or "Curso",
+                    "tipo_evaluacion": inferir_tipo_evaluacion(evaluacion),
+                    "nombre_evaluacion": evaluacion,
+                    "nota": nota,
+                    "peso": normalizar_decimal(row.get(col_peso, None)) if col_peso else None,
+                    "observacion": limpiar_texto(row.get(col_obs, "")) if col_obs else "",
+                    "origen": f"{origen}:tabla_{idx_tabla + 1}",
+                })
+
+    return _deduplicar_notas(notas)
 
 def extraer_notas_desde_texto(texto: str, ciclo_hint: str = "", origen: str = "INTRALU") -> List[Dict[str, Any]]:
-    """Extractor amplio para documentos de notas actuales y avance curricular.
+    """Extractor para PDF/texto de notas actuales y avance curricular.
 
-    Reconoce líneas con código de curso y valores 0-20. Cuando una línea no trae código,
-    conserva el último curso detectado.
+    Lee todas las evaluaciones disponibles, no solo la columna "Nota".
+    Reconoce explícitamente: Práctica 1/2, Monografía 1/2, Parcial, Final y Promedio/Nota.
     """
     notas: List[Dict[str, Any]] = []
     lineas = [limpiar_texto(x) for x in texto.splitlines() if limpiar_texto(x)]
     curso_actual = ""
     nombre_actual = ""
     ciclo_actual = ciclo_hint
+    encabezado_evaluaciones: List[str] = []
+
+    patron_eval = (
+        r"PRACTICA(?:\s+CALIFICADA)?\s*\d*|PRÁCTICA(?:\s+CALIFICADA)?\s*\d*|"
+        r"PC\s*\d+|PR\s*\d+|"
+        r"MONOGRAFIA\s*\d*|MONOGRAFÍA\s*\d*|MONO\s*\d*|"
+        r"EXAMEN\s+PARCIAL|PARCIAL|EP|"
+        r"EXAMEN\s+FINAL|FINAL|EF|"
+        r"PROMEDIO|PROM|NOTA\s+FINAL|NOTA"
+    )
 
     for linea in lineas:
+        linea_sin = _sin_tildes(linea)
+
         # Detectar ciclo en avance curricular, ej. 20231, 2024-1, PERIODO 20251.
         m_ciclo = re.search(r"\b(20\d{2}[- ]?[12]|20\d{3})\b", linea)
         if m_ciclo:
             ciclo_actual = m_ciclo.group(1).replace(" ", "")
+
+        # Si una línea parece encabezado de evaluaciones, la guardamos para mapear filas anchas.
+        posibles_encabezados = [normalizar_nombre_evaluacion(x) for x in re.findall(patron_eval, linea, flags=re.I)]
+        if posibles_encabezados and not re.search(r"\b[A-Z]{2}\d{3}", linea, flags=re.I):
+            encabezado_evaluaciones = posibles_encabezados
 
         m_curso = re.search(r"\b([A-Z]{2}\d{3})(?:[-/]?([A-Z]))?\b", linea, flags=re.I)
         if m_curso:
             codigo = m_curso.group(1).upper()
             seccion = (m_curso.group(2) or "").upper()
             curso_actual = codigo_visible(codigo, seccion) if seccion else codigo
-            # Nombre entre código y evaluación/nota aproximada.
+            # Nombre entre código y la primera evaluación detectada.
             resto = linea[m_curso.end():]
-            resto = re.sub(r"\b(PC\d*|EP|EF|PROM|PROMEDIO|NOTA|FINAL|PARCIAL)\b.*$", "", resto, flags=re.I)
+            resto = re.sub(rf"\b({patron_eval})\b.*$", "", resto, flags=re.I)
             nombre_actual = limpiar_texto(resto).strip("-:") or nombre_actual or curso_actual
 
-        # Patrones directos: PC1 15, EP 12, EF 14, Promedio 13.
-        pares = re.findall(
-            r"\b(PC\s*\d*|PR\s*\d*|EP|EF|PARCIAL|FINAL|PROM(?:EDIO)?|MONO\w*|LAB\s*\d*|TA\s*\d*)\s*[:=]?\s*(\d{1,2}(?:[.,]\d+)?)\b",
-            linea,
-            flags=re.I,
-        )
+        # 1) Pares explícitos en la misma línea: "Práctica 2 15", "Monografía 2: 17", "EP 12".
+        pares = re.findall(rf"\b({patron_eval})\b\s*[:=]?\s*(\d{{1,2}}(?:[.,]\d+)?)\b", linea, flags=re.I)
         for nombre_eval, nota_txt in pares:
             nota = normalizar_decimal(nota_txt)
             if nota is not None and 0 <= nota <= 20:
-                evaluacion = limpiar_texto(nombre_eval).upper()
+                evaluacion = normalizar_nombre_evaluacion(nombre_eval)
                 notas.append({
                     "ciclo": ciclo_actual,
                     "codigo_curso": curso_actual or "SIN-CODIGO",
@@ -494,39 +642,46 @@ def extraer_notas_desde_texto(texto: str, ciclo_hint: str = "", origen: str = "I
                     "origen": origen,
                 })
 
-        # Patrón de avance curricular frecuente: CODIGO NOMBRE ... NOTA_FINAL 13
-        if m_curso and not pares:
-            nums = [normalizar_decimal(x) for x in re.findall(r"\b\d{1,2}(?:[.,]\d+)?\b", linea)]
+        # 2) Fila ancha con encabezado previo: curso + números, ej.
+        # Encabezado: Práctica 1 Práctica 2 Monografía 2 Parcial Final Nota
+        # Fila: GE122 Sistema de Costos 13 15 16 12 14 14
+        if m_curso and encabezado_evaluaciones and not pares:
+            nums = [normalizar_decimal(x) for x in re.findall(r"\b\d{1,2}(?:[.,]\d+)?\b", linea[m_curso.end():])]
             validos = [x for x in nums if x is not None and 0 <= x <= 20]
-            # Evitar tomar ciclo/créditos como nota: usualmente la última cifra 0-20 es la nota final.
-            if validos:
-                nota = validos[-1]
-                if nota is not None:
+            if len(validos) >= len(encabezado_evaluaciones):
+                valores = validos[-len(encabezado_evaluaciones):]
+                for evaluacion, nota in zip(encabezado_evaluaciones, valores):
                     notas.append({
                         "ciclo": ciclo_actual,
                         "codigo_curso": curso_actual or "SIN-CODIGO",
                         "nombre_curso": nombre_actual or curso_actual or "Curso",
-                        "tipo_evaluacion": "Promedio",
-                        "nombre_evaluacion": "Nota final / avance curricular",
+                        "tipo_evaluacion": inferir_tipo_evaluacion(evaluacion),
+                        "nombre_evaluacion": evaluacion,
                         "nota": nota,
                         "peso": None,
-                        "observacion": "Detectado desde avance curricular" if "avance" in origen.lower() else "",
+                        "observacion": "",
                         "origen": origen,
                     })
 
-    # Deduplicar.
-    unicas: Dict[Tuple[str, str, str, str, float], Dict[str, Any]] = {}
-    for n in notas:
-        key = (
-            str(n.get("ciclo", "")),
-            str(n.get("codigo_curso", "")),
-            str(n.get("nombre_evaluacion", "")),
-            str(n.get("origen", "")),
-            float(n.get("nota") or 0),
-        )
-        unicas[key] = n
-    return list(unicas.values())
+        # 3) Avance curricular/histórico: si no hay pares ni encabezado, guardar última nota como promedio final.
+        if m_curso and not pares and not encabezado_evaluaciones:
+            nums = [normalizar_decimal(x) for x in re.findall(r"\b\d{1,2}(?:[.,]\d+)?\b", linea)]
+            validos = [x for x in nums if x is not None and 0 <= x <= 20]
+            if validos:
+                nota = validos[-1]
+                notas.append({
+                    "ciclo": ciclo_actual,
+                    "codigo_curso": curso_actual or "SIN-CODIGO",
+                    "nombre_curso": nombre_actual or curso_actual or "Curso",
+                    "tipo_evaluacion": "Promedio",
+                    "nombre_evaluacion": "Nota final / avance curricular",
+                    "nota": nota,
+                    "peso": None,
+                    "observacion": "Detectado desde avance curricular" if "avance" in origen.lower() else "",
+                    "origen": origen,
+                })
 
+    return _deduplicar_notas(notas)
 
 def extraer_notas_documento(documento: Dict[str, Any], ciclo_hint: str, origen: str) -> List[Dict[str, Any]]:
     if not documento:
@@ -768,6 +923,19 @@ def _capturar_avance_curricular(page, timeout_ms: int) -> Optional[Dict[str, Any
 def _extraer_boleta_documento(documento: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], List[str]]:
     if not documento:
         return [], [], {}, ["No se pudo abrir Imprimir boleta desde INTRALU."]
+
+    # Validación estricta: si el documento capturado es de notas, NO lo usamos como cursos.
+    if not es_boleta_matricula(documento):
+        if es_documento_notas(documento):
+            return [], [], {}, [
+                "El documento capturado en 'Imprimir boleta' parece ser de notas, no una boleta de matrícula. "
+                "No se cargó como cursos para evitar mezclar notas con cursos."
+            ]
+        return [], [], {}, [
+            "El documento capturado no tiene estructura de boleta de matrícula. "
+            "AURA solo cargará cursos/horarios desde Curso matriculado → Imprimir boleta."
+        ]
+
     try:
         if documento.get("tipo") == "pdf" and parsear_boleta_matricula:
             datos = parsear_boleta_matricula(documento.get("data") or b"")
@@ -908,21 +1076,33 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
             doc_boleta = _capturar_boleta(page, ciclo, timeout_ms)
             if doc_boleta:
                 documentos["boleta"] = doc_boleta.get("nombre", "boleta_matricula")
+                # Si INTRALU devolvió por error una pantalla de notas, la aprovechamos como notas,
+                # pero NO la mezclamos con cursos.
+                if es_documento_notas(doc_boleta) and not es_boleta_matricula(doc_boleta):
+                    notas.extend(extraer_notas_documento(doc_boleta, ciclo, "INTRALU documento capturado en boleta"))
             cursos_b, horarios_b, estudiante_b, adv_b = _extraer_boleta_documento(doc_boleta)
             cursos.extend(cursos_b)
             horarios.extend(horarios_b)
             estudiante.update({k: v for k, v in estudiante_b.items() if v})
             advertencias.extend(adv_b)
 
-            # Respaldo si el botón imprimir boleta no fue capturado: leer la página general.
+            # Respaldo si el botón imprimir boleta no fue capturado: leer la página general
+            # SOLO si realmente parece boleta. Si parece notas, se procesa como notas.
             if not cursos:
                 _ir_cursos_matriculados(page, ciclo, timeout_ms)
                 html_cursos = page.content()
                 estudiante.update(extraer_estudiante_desde_texto(html_a_texto(html_cursos)))
-                cursos_html, horarios_html, adv_html = extraer_cursos_y_horarios(html_cursos)
-                cursos.extend(cursos_html)
-                horarios.extend(horarios_html)
-                advertencias.extend(adv_html)
+                doc_pantalla = {"tipo": "html", "html": html_cursos, "nombre": "pantalla_curso_matriculado"}
+                if es_boleta_matricula(doc_pantalla):
+                    cursos_html, horarios_html, adv_html = extraer_cursos_y_horarios(html_cursos)
+                    cursos.extend(cursos_html)
+                    horarios.extend(horarios_html)
+                    advertencias.extend(adv_html)
+                elif es_documento_notas(doc_pantalla):
+                    notas.extend(extraer_notas_documento(doc_pantalla, ciclo, "INTRALU pantalla curso matriculado"))
+                    advertencias.append("La pantalla de Curso matriculado parecía contener notas; no se cargó como cursos. Para cursos/horarios se requiere 'Imprimir boleta'.")
+                else:
+                    advertencias.append("No se cargaron cursos desde la pantalla general porque no tenía estructura de boleta de matrícula.")
 
             cursos = _deduplicar_cursos(cursos)
 
