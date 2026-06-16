@@ -1,10 +1,12 @@
 from pathlib import Path
 from datetime import date, datetime, timedelta
 import html
+import json
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 
 from ai_engine import generar_diagnostico_ia, generar_plan_calendario_ia, generar_recomendacion_ia, nivel_por_puntaje
 from boleta_parser import parsear_boleta_matricula
@@ -396,127 +398,296 @@ def bloques_clase_para_calendar(horarios, fechas=None):
     return bloques
 
 
-def render_calendario(horarios=None, bloques_estudio=None, titulo="Calendario semanal", fecha_inicio=None, horizonte_dias=7):
+def _normalizar_hora(valor, defecto="08:00"):
+    texto = str(valor or defecto).strip()
+    if len(texto) >= 5 and texto[2] == ":":
+        return texto[:5]
+    try:
+        partes = texto.split(":")
+        h = int(partes[0])
+        m = int(partes[1]) if len(partes) > 1 else 0
+        return f"{h:02d}:{m:02d}"
+    except Exception:
+        return defecto
+
+
+def _normalizar_tipo_calendar(valor):
+    texto = str(valor or "").lower()
+    if "clase" in texto or "teoria" in texto or "teoría" in texto or "practica" in texto and "calificada" not in texto:
+        return "clase"
+    if "monograf" in texto:
+        return "monografia"
+    if "práctica" in texto or "practica" in texto:
+        return "practica"
+    if "final" in texto:
+        return "final"
+    if "parcial" in texto or "examen" in texto:
+        return "parcial"
+    if "almuerzo" in texto or "descanso" in texto:
+        return "descanso"
+    return "tarea"
+
+
+def _fecha_de_bloque(bloque, fecha_inicio, horizonte_dias):
+    fecha_texto = str(bloque.get("fecha", ""))[:10]
+    if fecha_texto:
+        return fecha_texto
+    dia = bloque.get("dia")
+    if dia:
+        for f in rango_fechas(fecha_inicio, horizonte_dias):
+            if fecha_a_dia(f) == dia:
+                return f.isoformat()
+    return fecha_inicio.isoformat()
+
+
+def _construir_eventos_calendar(horarios=None, bloques_estudio=None, fecha_inicio=None, horizonte_dias=7):
     horarios = horarios or []
     bloques_estudio = bloques_estudio or []
     fecha_inicio = fecha_inicio or date.today()
-    fechas = rango_fechas(fecha_inicio, horizonte_dias)
-    bloques = bloques_clase_para_calendar(horarios, fechas) + bloques_estudio
-    min_hour, max_hour, px_h = 7, 23, 60
-    height = (max_hour - min_hour) * px_h
+    eventos = []
+    fechas = rango_fechas(fecha_inicio, max(7, int(horizonte_dias or 7)))
 
-    toolbar = f"""
-    <div class='aura-calendar-toolbar'>
-        <div class='aura-toolbar-left'><span class='aura-icon-btn'>☰</span><span class='aura-icon-btn'>📅 Hoy</span><span>{escape(titulo)}</span></div>
-        <div><span class='aura-icon-btn'>🔎 Buscar</span><span class='aura-icon-btn'>⚙️ Semana</span></div>
-    </div>
-    """
-    head_cells = ["<div>GMT-05</div>"]
-    for f in fechas[:7]:
-        head_cells.append(f"<div><small>{fecha_a_dia(f)[:3].upper()}</small><br><b>{f.day}</b></div>")
-    head = "<div class='aura-cal-head'>" + "".join(head_cells) + "</div>"
-    time_labels = "".join([f"<div class='aura-time' style='top:{(h-min_hour)*px_h}px'>{h:02d}:00</div>" for h in range(min_hour, max_hour + 1)])
-    cols = [f"<div class='aura-time-col'>{time_labels}</div>"]
-    for f in fechas[:7]:
-        d = fecha_a_dia(f)
-        f_iso = f.isoformat()
-        events = []
-        for b in bloques:
-            b_fecha = str(b.get("fecha", ""))[:10]
-            if b_fecha:
-                if b_fecha != f_iso:
-                    continue
-            elif b.get("dia") != d:
+    for h in horarios:
+        for f in fechas:
+            if fecha_a_dia(f) != h.get("dia"):
                 continue
-            ini = max(min_hour, time_to_float(b.get("inicio")))
-            fin = min(max_hour, time_to_float(b.get("fin")))
-            if fin <= ini:
-                fin = ini + 1
-            top = (ini - min_hour) * px_h
-            hgt = max(30, (fin - ini) * px_h - 4)
-            color = escape(b.get("color") or ("#BDE0FE" if b.get("tipo") == "Clase" else "#A7F3D0"))
-            tipo_lower = str(b.get("tipo", "")).lower()
-            act_lower = str(b.get("tipo_actividad", b.get("actividad", ""))).lower()
-            if "clase" in tipo_lower:
-                clase = "clase"
-            elif "almuerzo" in tipo_lower or "descanso" in tipo_lower:
-                clase = "descanso"
-            elif "final" in act_lower or "parcial" in act_lower or "examen" in act_lower:
-                clase = "estudio examen"
-            elif "monograf" in act_lower:
-                clase = "estudio monografia"
-            elif "práctica" in act_lower or "practica" in act_lower:
-                clase = "estudio practica"
-            elif "tarea" in act_lower:
-                clase = "estudio tarea"
-            else:
-                clase = "estudio"
-            titulo_b = escape(b.get("curso", "Actividad"))
-            actividad = escape(b.get("actividad", ""))
-            hora = f"{escape(b.get('inicio'))} - {escape(b.get('fin'))}"
-            tarea = escape(b.get("tarea_origen", ""))
-            tipo_act = escape(b.get("tipo_actividad", ""))
-            if tipo_act:
-                tarea = f"{tipo_act} · {tarea}" if tarea else tipo_act
-            events.append(
-                f"<div class='aura-event {clase}' style='top:{top}px;height:{hgt}px;background:{color};'>"
-                f"<b>{titulo_b}</b><br><span>{actividad}</span><small>{hora}</small><small>{tarea}</small></div>"
-            )
-        cols.append(f"<div class='aura-day-col'>{''.join(events)}</div>")
-    body = f"<div class='aura-cal-body' style='height:{height}px;'>" + "".join(cols) + "</div>"
-    st.markdown(toolbar, unsafe_allow_html=True)
-    st.markdown(f"<div class='aura-calendar'>{head}{body}</div>", unsafe_allow_html=True)
+            curso = h.get("codigo_curso") or h.get("nombre_curso") or "Clase"
+            nombre = h.get("nombre_curso") or curso
+            tipo = h.get("tipo") or "Clase"
+            aula = h.get("aula") or ""
+            docente = h.get("docente") or ""
+            eventos.append({
+                "id": f"clase-{curso}-{f.isoformat()}-{h.get('inicio')}-{h.get('fin')}",
+                "title": f"{curso} · {nombre}",
+                "date": f.isoformat(),
+                "startTime": _normalizar_hora(h.get("inicio"), "08:00"),
+                "endTime": _normalizar_hora(h.get("fin"), "09:00"),
+                "course": nombre,
+                "type": "clase",
+                "difficulty": "media",
+                "repeat": "weekly",
+                "description": f"{tipo} · {docente} · Aula: {aula}".strip(" ·"),
+            })
+
+    for i, b in enumerate(bloques_estudio):
+        tipo_base = b.get("tipo_actividad") or b.get("tipo") or b.get("actividad") or "Tarea"
+        tipo = _normalizar_tipo_calendar(tipo_base)
+        fecha_evento = _fecha_de_bloque(b, fecha_inicio, horizonte_dias)
+        curso = b.get("curso") or "Actividad"
+        actividad = b.get("actividad") or b.get("tarea_origen") or "Bloque de estudio"
+        tarea = b.get("tarea_origen") or b.get("descripcion") or ""
+        if tipo == "descanso":
+            titulo = actividad
+        elif str(b.get("tipo", "")).lower() == "clase":
+            titulo = f"{curso}"
+            tipo = "clase"
+        else:
+            titulo = f"{curso} · {actividad}"
+        eventos.append({
+            "id": f"plan-{i}-{fecha_evento}-{b.get('inicio')}-{b.get('fin')}",
+            "title": titulo,
+            "date": fecha_evento,
+            "startTime": _normalizar_hora(b.get("inicio"), "08:00"),
+            "endTime": _normalizar_hora(b.get("fin"), "09:00"),
+            "course": curso,
+            "type": tipo,
+            "difficulty": str(b.get("dificultad", "media")).lower(),
+            "repeat": "none",
+            "description": tarea,
+        })
+
+    # evitar eventos sin duración válida
+    limpios = []
+    for e in eventos:
+        if e["endTime"] <= e["startTime"]:
+            h = int(e["startTime"][:2])
+            m = e["startTime"][3:5]
+            e["endTime"] = f"{min(23, h + 1):02d}:{m}"
+        limpios.append(e)
+    return limpios
+
+
+def _calendar_google_html(eventos, vista="week", fecha_inicio=None, titulo="AURA Calendar"):
+    fecha_inicio = fecha_inicio or date.today()
+    cursos = sorted({str(e.get("course") or "Sin curso") for e in eventos})
+    course_options = "<option value='todos'>Todos los cursos</option>" + "".join(
+        [f"<option value=\"{escape(c)}\">{escape(c)}</option>" for c in cursos]
+    )
+    eventos_json = json.dumps(eventos, ensure_ascii=False)
+    initial_date = fecha_inicio.isoformat()
+    initial_view = "month" if vista.lower().startswith("month") or vista.lower().startswith("mes") else "week"
+
+    template = r'''
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:"Google Sans","Segoe UI",Arial,sans-serif;}
+body{background:#f8fafd;color:#202124;overflow:hidden;}
+.app{display:grid;grid-template-columns:250px 1fr;height:820px;border:1px solid #dadce0;border-radius:24px;overflow:hidden;background:#fff;box-shadow:0 14px 38px rgba(15,23,42,.10);}
+.sidebar{background:#fff;border-right:1px solid #dadce0;padding:20px;display:flex;flex-direction:column;gap:18px;}
+.logo{font-size:22px;font-weight:800;color:#1a73e8;letter-spacing:-.03em;}
+.btn-create{border:none;background:#fff;box-shadow:0 2px 8px rgba(60,64,67,.25);border-radius:28px;padding:14px 18px;font-size:15px;cursor:pointer;text-align:left;font-weight:700;transition:.2s;}
+.btn-create:hover{background:#f1f3f4;transform:translateY(-1px);}
+.side-card{border:1px solid #e0e0e0;border-radius:18px;padding:16px;background:#fff;}
+.side-card h3{font-size:15px;margin-bottom:12px;color:#202124;}
+.filter-group{display:flex;flex-direction:column;gap:11px;}
+label{font-size:13px;font-weight:700;color:#5f6368;}
+select,input,textarea{width:100%;border:1px solid #dadce0;border-radius:10px;padding:10px;background:#fff;outline:none;font-size:14px;color:#202124;}
+select:focus,input:focus,textarea:focus{border-color:#1a73e8;box-shadow:0 0 0 2px rgba(26,115,232,.12);}
+.legend{display:flex;flex-direction:column;gap:10px;font-size:14px;}
+.legend-item{display:flex;align-items:center;gap:9px;}
+.dot{width:12px;height:12px;border-radius:50%;}
+.dot.clase{background:#49a3e8}.dot.tarea{background:#1a73e8}.dot.monografia{background:#34a853}.dot.practica{background:#fbbc04}.dot.parcial{background:#ea4335}.dot.final{background:#9334e6}.dot.descanso{background:#93c5fd}
+.main{display:flex;flex-direction:column;height:820px;overflow:hidden;}
+.topbar{height:76px;background:#fff;border-bottom:1px solid #dadce0;display:flex;align-items:center;justify-content:space-between;padding:0 24px;gap:16px;}
+.left-controls,.right-controls{display:flex;align-items:center;gap:10px;}
+.today-btn,.nav-btn{border:1px solid #dadce0;background:#fff;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;color:#3c4043;transition:.15s;}
+.nav-btn{width:40px;height:40px;font-size:22px;display:flex;align-items:center;justify-content:center;padding:0;}
+.today-btn:hover,.nav-btn:hover{background:#f1f3f4;}
+.calendar-title{font-size:23px;font-weight:600;min-width:270px;margin-left:8px;letter-spacing:-.03em;}
+.calendar-wrapper{flex:1;overflow:hidden;padding:16px 20px 22px;}
+.hidden{display:none!important;}
+.month-calendar{background:#fff;border:1px solid #dadce0;border-radius:18px;overflow:hidden;height:100%;display:grid;grid-template-rows:48px 1fr;}
+.weekdays{display:grid;grid-template-columns:repeat(7,1fr);background:#f8fafd;border-bottom:1px solid #dadce0;}
+.weekday{display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#5f6368;border-right:1px solid #e0e0e0;}
+.weekday:last-child{border-right:none;}
+.days{display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:minmax(110px,1fr);overflow:auto;}
+.day{border-right:1px solid #e0e0e0;border-bottom:1px solid #e0e0e0;padding:8px;background:#fff;cursor:pointer;transition:.15s;overflow:hidden;}
+.day:hover{background:#f8fafd;}.day:nth-child(7n){border-right:none;}
+.day-number{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;margin-bottom:6px;}
+.today .day-number{background:#1a73e8;color:#fff;font-weight:800;}.other-month{background:#fafafa;color:#a0a0a0;}
+.month-event{padding:5px 7px;border-radius:8px;font-size:12px;margin-bottom:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;font-weight:700;color:#fff;}
+.week-calendar{background:#fff;border:1px solid #dadce0;border-radius:18px;height:100%;display:grid;grid-template-rows:64px 1fr;overflow:hidden;}
+.week-header{display:grid;grid-template-columns:70px 1fr;border-bottom:1px solid #dadce0;background:#fff;}
+.week-corner{border-right:1px solid #dadce0;display:flex;align-items:center;justify-content:center;font-size:11px;color:#5f6368;}
+.week-days-header{display:grid;grid-template-columns:repeat(7,1fr);}
+.week-day-header{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-right:1px solid #e0e0e0;color:#5f6368;font-size:12px;font-weight:700;}
+.week-day-header:last-child{border-right:none;}
+.week-day-header .number{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#202124;font-size:18px;font-weight:600;}
+.week-day-header.today-header .number{background:#1a73e8;color:#fff;font-weight:800;}
+.week-scroll{display:grid;grid-template-columns:70px 1fr;overflow-y:auto;overflow-x:hidden;}
+.time-column{border-right:1px solid #dadce0;background:#fff;}
+.hour-label{height:64px;padding-right:10px;text-align:right;font-size:12px;color:#70757a;transform:translateY(-8px);}
+.week-day-columns{display:grid;grid-template-columns:repeat(7,1fr);position:relative;}
+.week-day{position:relative;min-height:1152px;border-right:1px solid #e0e0e0;background-image:linear-gradient(to bottom,#e0e0e0 1px,transparent 1px);background-size:100% 64px;cursor:pointer;}
+.week-day:last-child{border-right:none;}
+.week-event{position:absolute;left:5px;right:5px;border-radius:8px;padding:7px 8px;color:white;font-size:12px;line-height:1.2;cursor:pointer;overflow:hidden;box-shadow:0 1px 3px rgba(60,64,67,.25);font-weight:700;}
+.week-event small{display:block;font-size:11px;margin-top:2px;font-weight:600;opacity:.95;}
+.month-event.clase,.week-event.clase{background:#49a3e8;color:#fff;}
+.month-event.tarea,.week-event.tarea{background:#1a73e8;color:#fff;}
+.month-event.monografia,.week-event.monografia{background:#34a853;color:#fff;}
+.month-event.practica,.week-event.practica{background:#fbbc04;color:#202124;}
+.month-event.parcial,.week-event.parcial{background:#ea4335;color:#fff;}
+.month-event.final,.week-event.final{background:#9334e6;color:#fff;}
+.month-event.descanso,.week-event.descanso{background:#93c5fd;color:#202124;}
+.event-popover{position:fixed;width:500px;background:#f1f4f9;border-radius:26px;box-shadow:0 6px 20px rgba(60,64,67,.28);z-index:120;padding:18px 22px 22px;animation:popoverIn .18s ease;}
+@keyframes popoverIn{from{opacity:0;transform:translateY(8px) scale(.98);}to{opacity:1;transform:translateY(0) scale(1);}}
+.popover-actions{display:flex;justify-content:flex-end;gap:12px;margin-bottom:18px;}
+.popover-actions button{border:none;background:transparent;font-size:20px;color:#3c4043;cursor:pointer;width:30px;height:30px;border-radius:50%;}
+.popover-actions button:hover{background:#e3e7ee;}
+.popover-content{display:grid;grid-template-columns:24px 1fr;gap:16px;}
+.color-box{width:14px;height:14px;border-radius:4px;margin-top:8px;}
+.popover-main h2{font-size:23px;line-height:1.25;font-weight:500;color:#202124;margin-bottom:5px;}
+.popover-date,.popover-repeat{font-size:14px;color:#3c4043;margin-bottom:3px;}.popover-repeat{margin-bottom:16px;}
+.invite-btn{border:1px solid #9aa0a6;background:transparent;color:#0b57d0;border-radius:24px;padding:9px 18px;font-size:14px;font-weight:600;cursor:pointer;margin-bottom:18px;}
+.invite-btn:hover{background:#e8f0fe;}.popover-info{display:flex;flex-direction:column;gap:14px;}.info-row{display:grid;grid-template-columns:26px 1fr;gap:14px;align-items:flex-start;font-size:14px;color:#3c4043;}.info-row span{color:#5f6368;font-size:18px;}.info-row p{line-height:1.35;}
+@media(max-width:950px){.app{grid-template-columns:1fr}.sidebar{display:none}.topbar{height:auto;padding:14px;flex-wrap:wrap}.calendar-title{font-size:20px;min-width:180px}.calendar-wrapper{padding:10px}.event-popover{width:calc(100vw - 24px);left:12px!important;right:12px}.right-controls{flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+  <div class="logo">AURA Calendar</div>
+  <button class="btn-create" onclick="alert('Para crear o editar actividades usa los botones de AURA debajo del calendario.')">+ Crear actividad</button>
+  <div class="side-card"><h3>Filtros</h3><div class="filter-group">
+    <label>Tipo de actividad</label><select id="filterType" onchange="renderCalendar()">
+      <option value="todos">Todos</option><option value="clase">Clases</option><option value="tarea">Tareas</option><option value="monografia">Monografías</option><option value="practica">Prácticas calificadas</option><option value="parcial">Examen parcial</option><option value="final">Examen final</option><option value="descanso">Descanso / almuerzo</option>
+    </select>
+    <label>Curso</label><select id="filterCourse" onchange="renderCalendar()">__COURSES_OPTIONS__</select>
+  </div></div>
+  <div class="side-card"><h3>Leyenda</h3><div class="legend">
+    <div class="legend-item"><span class="dot clase"></span> Clase</div>
+    <div class="legend-item"><span class="dot tarea"></span> Tarea</div>
+    <div class="legend-item"><span class="dot monografia"></span> Monografía</div>
+    <div class="legend-item"><span class="dot practica"></span> Práctica calificada</div>
+    <div class="legend-item"><span class="dot parcial"></span> Examen parcial</div>
+    <div class="legend-item"><span class="dot final"></span> Examen final</div>
+    <div class="legend-item"><span class="dot descanso"></span> Descanso</div>
+  </div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div class="left-controls"><button class="today-btn" onclick="goToday()">Hoy</button><button class="nav-btn" onclick="previousPeriod()">‹</button><button class="nav-btn" onclick="nextPeriod()">›</button><div class="calendar-title" id="calendarTitle"></div></div>
+  <div class="right-controls"><select id="monthSelect" onchange="changeMonthYear()"></select><select id="yearSelect" onchange="changeMonthYear()"></select><select id="viewSelect" onchange="renderCalendar()"><option value="week">Semana</option><option value="month">Mes</option></select></div>
+</header>
+<section class="calendar-wrapper">
+  <div class="month-calendar hidden" id="monthView"><div class="weekdays"><div class="weekday">Dom</div><div class="weekday">Lun</div><div class="weekday">Mar</div><div class="weekday">Mié</div><div class="weekday">Jue</div><div class="weekday">Vie</div><div class="weekday">Sáb</div></div><div class="days" id="days"></div></div>
+  <div class="week-calendar" id="weekView"><div class="week-header"><div class="week-corner">GMT-05</div><div class="week-days-header" id="weekDaysHeader"></div></div><div class="week-scroll"><div class="time-column" id="timeColumn"></div><div class="week-day-columns" id="weekDayColumns"></div></div></div>
+</section>
+</main>
+</div>
+<div class="event-popover hidden" id="eventPopover">
+  <div class="popover-actions"><button title="Correo">✉</button><button title="Más">⋮</button><button title="Cerrar" onclick="closeEventPopover()">×</button></div>
+  <div class="popover-content"><div class="color-box" id="popoverColor"></div><div class="popover-main"><h2 id="popoverTitle">Título</h2><p class="popover-date" id="popoverDate"></p><p class="popover-repeat" id="popoverRepeat"></p><button class="invite-btn" onclick="copyInviteLink()">⤴ Copiar enlace</button><div class="popover-info"><div class="info-row"><span>☰</span><p id="popoverCourse"></p></div><div class="info-row"><span>🔔</span><p>30 minutos antes</p></div><div class="info-row"><span>📅</span><p>AURA</p></div><div class="info-row"><span>📝</span><p id="popoverDescription"></p></div></div></div></div>
+</div>
+<script>
+const monthNames=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const shortMonthNames=["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+const dayNames=["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const shortDayNames=["DOM","LUN","MAR","MIÉ","JUE","VIE","SÁB"];
+const colors={clase:"#49a3e8",tarea:"#1a73e8",monografia:"#34a853",practica:"#fbbc04",parcial:"#ea4335",final:"#9334e6",descanso:"#93c5fd"};
+const START_HOUR=6, END_HOUR=24, HOUR_HEIGHT=64;
+let currentDate=parseDate("__INITIAL_DATE__");
+let selectedEventIndex=null;
+let events=__EVENTS_JSON__;
+const calendarTitle=document.getElementById("calendarTitle"),monthSelect=document.getElementById("monthSelect"),yearSelect=document.getElementById("yearSelect"),viewSelect=document.getElementById("viewSelect"),monthView=document.getElementById("monthView"),weekView=document.getElementById("weekView"),daysContainer=document.getElementById("days"),weekDaysHeader=document.getElementById("weekDaysHeader"),timeColumn=document.getElementById("timeColumn"),weekDayColumns=document.getElementById("weekDayColumns");
+function initSelectors(){monthNames.forEach((m,i)=>{const o=document.createElement("option");o.value=i;o.textContent=m;monthSelect.appendChild(o);});const yNow=new Date().getFullYear();for(let y=yNow-5;y<=yNow+10;y++){const o=document.createElement("option");o.value=y;o.textContent=y;yearSelect.appendChild(o);}viewSelect.value="__INITIAL_VIEW__";}
+function renderCalendar(){closeEventPopover();const view=viewSelect.value;monthSelect.value=currentDate.getMonth();yearSelect.value=currentDate.getFullYear();if(view==="month"){monthView.classList.remove("hidden");weekView.classList.add("hidden");renderMonthView();}else{weekView.classList.remove("hidden");monthView.classList.add("hidden");renderWeekView();}}
+function renderMonthView(){daysContainer.innerHTML="";const year=currentDate.getFullYear(),month=currentDate.getMonth();calendarTitle.textContent=`${monthNames[month]} ${year}`;const firstDay=new Date(year,month,1),lastDay=new Date(year,month+1,0),startDay=firstDay.getDay(),totalDays=lastDay.getDate(),prevLastDay=new Date(year,month,0).getDate(),today=new Date();let dayNumber=1,nextMonthDay=1;for(let i=0;i<42;i++){const dayCell=document.createElement("div");dayCell.classList.add("day");let displayedDay,cellDate,isCurrentMonth=true;if(i<startDay){displayedDay=prevLastDay-startDay+i+1;cellDate=new Date(year,month-1,displayedDay);isCurrentMonth=false;}else if(dayNumber<=totalDays){displayedDay=dayNumber;cellDate=new Date(year,month,dayNumber);dayNumber++;}else{displayedDay=nextMonthDay;cellDate=new Date(year,month+1,nextMonthDay);nextMonthDay++;isCurrentMonth=false;}const formattedDate=formatDate(cellDate);if(!isCurrentMonth)dayCell.classList.add("other-month");if(isSameDay(cellDate,today))dayCell.classList.add("today");const number=document.createElement("div");number.classList.add("day-number");number.textContent=displayedDay;dayCell.appendChild(number);const dayEvents=getFilteredEvents().filter(e=>e.date===formattedDate).sort((a,b)=>a.startTime.localeCompare(b.startTime));dayEvents.forEach(event=>{const realIndex=events.findIndex(item=>item.id===event.id);const el=document.createElement("div");el.classList.add("month-event",event.type);el.textContent=`${formatShortTime(event.startTime)} ${event.title}`;el.title=`${event.title} - ${event.course}`;el.onclick=function(e){e.stopPropagation();openEventPopover(event,realIndex,e);};dayCell.appendChild(el);});daysContainer.appendChild(dayCell);}}
+function renderWeekView(){weekDaysHeader.innerHTML="";timeColumn.innerHTML="";weekDayColumns.innerHTML="";const weekStart=getWeekStart(currentDate),weekEnd=addDays(weekStart,6);calendarTitle.textContent=getWeekTitle(weekStart,weekEnd);for(let hour=START_HOUR;hour<END_HOUR;hour++){const label=document.createElement("div");label.classList.add("hour-label");label.textContent=formatHourLabel(hour);timeColumn.appendChild(label);}for(let i=0;i<7;i++){const dayDate=addDays(weekStart,i),formattedDate=formatDate(dayDate);const header=document.createElement("div");header.classList.add("week-day-header");if(isSameDay(dayDate,new Date()))header.classList.add("today-header");header.innerHTML=`<div>${shortDayNames[i]}</div><div class="number">${dayDate.getDate()}</div>`;weekDaysHeader.appendChild(header);const dayColumn=document.createElement("div");dayColumn.classList.add("week-day");const dayEvents=getFilteredEvents().filter(e=>e.date===formattedDate).sort((a,b)=>a.startTime.localeCompare(b.startTime));dayEvents.forEach(event=>{const realIndex=events.findIndex(item=>item.id===event.id);const card=document.createElement("div");card.classList.add("week-event",event.type);card.style.top=`${getEventTop(event.startTime)}px`;card.style.height=`${getEventHeight(event.startTime,event.endTime)}px`;card.innerHTML=`${event.title}<small>${formatTimeRange(event.startTime,event.endTime)}</small>`;card.onclick=function(e){e.stopPropagation();openEventPopover(event,realIndex,e);};dayColumn.appendChild(card);});weekDayColumns.appendChild(dayColumn);}}
+function getFilteredEvents(){const filterType=document.getElementById("filterType").value,filterCourse=document.getElementById("filterCourse").value;return events.filter(e=>(filterType==="todos"||e.type===filterType)&&(filterCourse==="todos"||e.course===filterCourse));}
+function getEventTop(t){return Math.max(0,(timeToDecimal(t)-START_HOUR)*HOUR_HEIGHT);}function getEventHeight(s,e){const d=Math.max(.5,timeToDecimal(e)-timeToDecimal(s));return Math.max(34,d*HOUR_HEIGHT);}function timeToDecimal(time){const [h,m]=time.split(":").map(Number);return h+m/60;}
+function previousPeriod(){if(viewSelect.value==="month")currentDate.setMonth(currentDate.getMonth()-1);else currentDate.setDate(currentDate.getDate()-7);renderCalendar();}function nextPeriod(){if(viewSelect.value==="month")currentDate.setMonth(currentDate.getMonth()+1);else currentDate.setDate(currentDate.getDate()+7);renderCalendar();}function goToday(){currentDate=new Date();renderCalendar();}function changeMonthYear(){currentDate=new Date(parseInt(yearSelect.value),parseInt(monthSelect.value),1);renderCalendar();}
+function openEventPopover(event,index,mouseEvent){selectedEventIndex=index;const popover=document.getElementById("eventPopover");document.getElementById("popoverTitle").textContent=event.title;document.getElementById("popoverDate").textContent=formatPopoverDate(event);document.getElementById("popoverRepeat").textContent=getRepeatText(event);document.getElementById("popoverCourse").innerHTML=`${event.course}<br>Dificultad: ${capitalize(event.difficulty || "media")}`;document.getElementById("popoverDescription").textContent=event.description||"Sin descripción";document.getElementById("popoverColor").style.background=colors[event.type]||"#1a73e8";popover.classList.remove("hidden");const x=mouseEvent.clientX,y=mouseEvent.clientY,w=500,h=370;let left=x+16,top=y-40;if(left+w>window.innerWidth)left=x-w-16;if(top+h>window.innerHeight)top=window.innerHeight-h-20;if(top<20)top=20;popover.style.left=`${left}px`;popover.style.top=`${top}px`;}
+function closeEventPopover(){document.getElementById("eventPopover").classList.add("hidden");selectedEventIndex=null;}function copyInviteLink(){navigator.clipboard.writeText(window.location.href);alert("Enlace copiado.");}
+function getRepeatText(event){if(event.repeat==="weekly"){const d=parseDate(event.date);return `Cada semana el ${dayNames[d.getDay()].toLowerCase()}`;}return "No se repite";}
+function formatPopoverDate(event){const d=parseDate(event.date);return `${dayNames[d.getDay()]}, ${d.getDate()} de ${shortMonthNames[d.getMonth()]} · ${formatTimeRange(event.startTime,event.endTime)}`;}function formatTimeRange(s,e){return `${formatShortTime(s)} – ${formatShortTime(e)}`;}function formatShortTime(time){const [hrRaw,minRaw]=time.split(":").map(Number);let hr=hrRaw;const min=String(minRaw).padStart(2,"0"),ampm=hr>=12?"pm":"am";hr=hr%12||12;return min==="00"?`${hr}${ampm}`:`${hr}:${min}${ampm}`;}function formatHourLabel(h){const a=h>=12?"pm":"am",fh=h%12||12;return `${fh} ${a}`;}
+function getWeekStart(date){const d=new Date(date);d.setDate(d.getDate()-d.getDay());d.setHours(0,0,0,0);return d;}function getWeekTitle(start,end){const sameMonth=start.getMonth()===end.getMonth(),sameYear=start.getFullYear()===end.getFullYear();if(sameMonth&&sameYear)return `${start.getDate()} – ${end.getDate()} de ${monthNames[start.getMonth()]} ${start.getFullYear()}`;if(sameYear)return `${start.getDate()} ${shortMonthNames[start.getMonth()]} – ${end.getDate()} ${shortMonthNames[end.getMonth()]} ${start.getFullYear()}`;return `${start.getDate()} ${shortMonthNames[start.getMonth()]} ${start.getFullYear()} – ${end.getDate()} ${shortMonthNames[end.getMonth()]} ${end.getFullYear()}`;}
+function addDays(date,days){const d=new Date(date);d.setDate(d.getDate()+days);return d;}function formatDate(date){return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;}function parseDate(str){const [y,m,d]=str.split("-").map(Number);return new Date(y,m-1,d);}function isSameDay(a,b){return a.getDate()===b.getDate()&&a.getMonth()===b.getMonth()&&a.getFullYear()===b.getFullYear();}function capitalize(t){return String(t||"").charAt(0).toUpperCase()+String(t||"").slice(1);}
+document.addEventListener("click",function(e){const popover=document.getElementById("eventPopover");if(!popover.classList.contains("hidden")&&!popover.contains(e.target)&&!e.target.classList.contains("month-event")&&!e.target.classList.contains("week-event")){closeEventPopover();}});
+initSelectors();renderCalendar();
+</script>
+</body></html>
+'''
+    html_code = template.replace("__EVENTS_JSON__", eventos_json)
+    html_code = html_code.replace("__COURSES_OPTIONS__", course_options)
+    html_code = html_code.replace("__INITIAL_DATE__", initial_date)
+    html_code = html_code.replace("__INITIAL_VIEW__", initial_view)
+    return html_code
+
+
+def render_calendario(horarios=None, bloques_estudio=None, titulo="Calendario semanal", fecha_inicio=None, horizonte_dias=7):
+    fecha_inicio = fecha_inicio or date.today()
+    eventos = _construir_eventos_calendar(horarios, bloques_estudio, fecha_inicio, horizonte_dias)
+    st.caption(titulo)
+    components.html(_calendar_google_html(eventos, vista="week", fecha_inicio=fecha_inicio, titulo=titulo), height=850, scrolling=False)
 
 
 def render_calendario_mensual(horarios=None, bloques_estudio=None, titulo="Calendario mensual", fecha_inicio=None):
-    horarios = horarios or []
-    bloques_estudio = bloques_estudio or []
     fecha_inicio = fecha_inicio or date.today()
+    # Se muestra todo el mes desde el día 1, pero mantiene eventos de clases y plan desde el horizonte actual.
     primer_dia = date(fecha_inicio.year, fecha_inicio.month, 1)
     if fecha_inicio.month == 12:
         siguiente = date(fecha_inicio.year + 1, 1, 1)
     else:
         siguiente = date(fecha_inicio.year, fecha_inicio.month + 1, 1)
-    ultimo_dia = siguiente - timedelta(days=1)
-    fechas_mes = rango_fechas(primer_dia, (ultimo_dia - primer_dia).days + 1)
-    bloques_clase = bloques_clase_para_calendar(horarios, fechas_mes)
-    bloques = bloques_clase + (bloques_estudio or [])
-    por_fecha = {}
-    for b in bloques:
-        f = str(b.get("fecha", ""))[:10]
-        if not f:
-            continue
-        por_fecha.setdefault(f, []).append(b)
-
-    st.subheader(titulo)
-    heads = "".join([f"<div class='aura-month-head'>{d[:3]}</div>" for d in DIAS])
-    html_mes = ["<div class='aura-month'>", heads]
-    for _ in range(primer_dia.weekday()):
-        html_mes.append("<div class='aura-month-day empty'></div>")
-    for f in fechas_mes:
-        eventos = por_fecha.get(f.isoformat(), [])
-        eventos = sorted(eventos, key=lambda x: str(x.get("inicio", "00:00")))[:5]
-        ev_html = ""
-        for e in eventos:
-            color = escape(e.get("color") or "#A7F3D0")
-            act_lower = str(e.get("tipo_actividad", e.get("actividad", ""))).lower()
-            clase_ev = ""
-            if "final" in act_lower or "parcial" in act_lower or "examen" in act_lower:
-                clase_ev = " examen"
-            elif "monograf" in act_lower:
-                clase_ev = " monografia"
-            elif "práctica" in act_lower or "practica" in act_lower:
-                clase_ev = " practica"
-            elif "tarea" in act_lower:
-                clase_ev = " tarea"
-            etiqueta = escape(f"{e.get('inicio','')} {e.get('curso','')} · {e.get('actividad','')}")
-            ev_html += f"<div class='aura-month-event{clase_ev}' style='background:{color};'>{etiqueta}</div>"
-        if len(por_fecha.get(f.isoformat(), [])) > 5:
-            ev_html += f"<div class='aura-muted'>+{len(por_fecha[f.isoformat()])-5} más</div>"
-        marca_hoy = " style='outline:2px solid #60A5FA;'" if f == date.today() else ""
-        html_mes.append(f"<div class='aura-month-day'{marca_hoy}><div class='aura-day-number'>{f.day}</div>{ev_html}</div>")
-    html_mes.append("</div>")
-    st.markdown("".join(html_mes), unsafe_allow_html=True)
+    horizonte = max(7, (siguiente - primer_dia).days)
+    eventos = _construir_eventos_calendar(horarios, bloques_estudio, primer_dia, horizonte)
+    st.caption(titulo)
+    components.html(_calendar_google_html(eventos, vista="month", fecha_inicio=fecha_inicio, titulo=titulo), height=850, scrolling=False)
 
 def inicializar_diagnostico_state(estudiante_id, detalle):
     pref = f"diag_{estudiante_id}_"
