@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 import html
 import json
 
@@ -22,6 +22,7 @@ from database import (
     eliminar_estudiante,
     eliminar_tarea,
     eliminar_usuario,
+    eliminar_horario_clase,
     existe_curso,
     existe_tarea,
     guardar_diagnostico_ia,
@@ -49,6 +50,7 @@ from database import (
     obtener_usuario_por_id,
     registrar_curso,
     registrar_estudiante,
+    registrar_horario_clase,
     registrar_tarea,
     registrar_usuario,
 )
@@ -897,14 +899,51 @@ elif menu == "Perfil Académico":
                     creditos = st.number_input("Créditos", 0, 8, 3)
                     dificultad = st.slider("Dificultad", 1, 5, 3)
                     estado = st.selectbox("Estado", ["En curso", "Aprobado", "Desaprobado", "Retirado"])
-                    if st.form_submit_button("Guardar curso"):
+
+                    st.markdown("#### 🕒 Horario del curso")
+                    agregar_horario = st.checkbox("Agregar horario ahora", value=True)
+                    tipo_clase = st.selectbox("Tipo de clase", ["Teoría", "Práctica", "Laboratorio", "Clase"], disabled=not agregar_horario)
+                    dias_clase = st.multiselect(
+                        "Día(s) de clase",
+                        ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"],
+                        default=[],
+                        disabled=not agregar_horario
+                    )
+                    col_h1, col_h2 = st.columns(2)
+                    with col_h1:
+                        hora_inicio = st.time_input("Hora de inicio", value=time(8, 0), disabled=not agregar_horario)
+                    with col_h2:
+                        hora_fin = st.time_input("Hora de fin", value=time(10, 0), disabled=not agregar_horario)
+                    aula = st.text_input("Aula", disabled=not agregar_horario)
+
+                    if st.form_submit_button("💾 Guardar curso"):
                         if not nombre_curso.strip():
                             st.error("Ingresa el nombre del curso.")
                         elif existe_curso(estudiante_id, nombre_curso):
                             st.warning("Este curso ya está registrado.")
+                        elif agregar_horario and not dias_clase:
+                            st.warning("Selecciona al menos un día de clase o desactiva 'Agregar horario ahora'.")
+                        elif agregar_horario and hora_fin <= hora_inicio:
+                            st.warning("La hora de fin debe ser mayor que la hora de inicio.")
                         else:
-                            registrar_curso(estudiante_id, nombre_curso, docente, creditos, dificultad, estado)
-                            st.success("Curso registrado.")
+                            curso_id_nuevo = registrar_curso(estudiante_id, nombre_curso, docente, creditos, dificultad, estado)
+
+                            if agregar_horario:
+                                for dia in dias_clase:
+                                    registrar_horario_clase(
+                                        estudiante_id=estudiante_id,
+                                        curso_id=curso_id_nuevo,
+                                        codigo_curso="",
+                                        nombre_curso=nombre_curso,
+                                        tipo=tipo_clase,
+                                        docente=docente,
+                                        dia=dia,
+                                        hora_inicio=hora_inicio.strftime("%H:%M"),
+                                        hora_fin=hora_fin.strftime("%H:%M"),
+                                        aula=aula,
+                                    )
+
+                            st.success("Curso registrado con su horario." if agregar_horario else "Curso registrado.")
                             st.rerun()
         with col_hint:
             st.caption("También puedes importar cursos y horarios automáticamente desde la boleta.")
@@ -932,9 +971,65 @@ elif menu == "Perfil Académico":
         else:
             st.info("Aún no hay cursos registrados.")
 
+        if cursos:
+            st.divider()
+            st.subheader("🕒 Horarios de clase")
+            with st.popover("➕ Agregar horario a un curso"):
+                with st.form("form_add_horario_manual"):
+                    opciones_curso_horario = {f"{c[1]} | Dificultad {c[4]}": c for c in cursos}
+                    curso_horario_txt = st.selectbox("Curso", list(opciones_curso_horario.keys()))
+                    curso_horario = opciones_curso_horario[curso_horario_txt]
+                    tipo_horario = st.selectbox("Tipo", ["Teoría", "Práctica", "Laboratorio", "Clase"])
+                    dias_horario = st.multiselect(
+                        "Día(s)",
+                        ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"],
+                        default=[]
+                    )
+                    col_i, col_f = st.columns(2)
+                    with col_i:
+                        inicio_horario = st.time_input("Inicio", value=time(8, 0), key="inicio_horario_manual")
+                    with col_f:
+                        fin_horario = st.time_input("Fin", value=time(10, 0), key="fin_horario_manual")
+                    aula_horario = st.text_input("Aula")
+
+                    if st.form_submit_button("💾 Guardar horario"):
+                        if not dias_horario:
+                            st.warning("Selecciona al menos un día.")
+                        elif fin_horario <= inicio_horario:
+                            st.warning("La hora de fin debe ser mayor que la hora de inicio.")
+                        else:
+                            for dia in dias_horario:
+                                registrar_horario_clase(
+                                    estudiante_id=estudiante_id,
+                                    curso_id=curso_horario[0],
+                                    codigo_curso="",
+                                    nombre_curso=curso_horario[1],
+                                    tipo=tipo_horario,
+                                    docente=curso_horario[2] or "",
+                                    dia=dia,
+                                    hora_inicio=inicio_horario.strftime("%H:%M"),
+                                    hora_fin=fin_horario.strftime("%H:%M"),
+                                    aula=aula_horario,
+                                )
+                            st.success("Horario agregado correctamente.")
+                            st.rerun()
+
         horarios = listar_horarios_clase(estudiante_id)
+        if horarios:
+            st.dataframe(
+                pd.DataFrame(horarios)[["id", "nombre_curso", "tipo", "docente", "dia", "inicio", "fin", "aula"]],
+                use_container_width=True
+            )
+            with st.expander("🗑️ Eliminar un bloque de horario"):
+                opciones_h = {f"{h['nombre_curso']} | {h['tipo']} | {h['dia']} {h['inicio']}-{h['fin']}": h['id'] for h in horarios}
+                horario_sel = st.selectbox("Bloque de horario", list(opciones_h.keys()))
+                if st.button("🗑️ Eliminar horario seleccionado"):
+                    eliminar_horario_clase(opciones_h[horario_sel])
+                    st.warning("Horario eliminado.")
+                    st.rerun()
+
         render_calendario(horarios, [], "🗓️ Horario de clases")
-        if horarios and st.button("🧹 Limpiar horarios importados"):
+        if horarios and st.button("🧹 Limpiar todos los horarios"):
             limpiar_horarios_clase(estudiante_id)
             st.success("Horarios eliminados.")
             st.rerun()

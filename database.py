@@ -504,13 +504,22 @@ def obtener_ultimo_diagnostico_detallado(estudiante_id: int):
 
 
 def registrar_curso(estudiante_id: int, nombre_curso: str, docente: str, creditos: int, dificultad: int, estado: str, codigo_curso: Optional[str] = None):
-    _execute(
-        """
-        INSERT INTO cursos (estudiante_id, nombre_curso, codigo_curso, docente, creditos, dificultad, estado, fecha_registro)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (estudiante_id, nombre_curso, codigo_curso, docente, creditos, dificultad, estado, datetime.now()),
-    )
+    """Registra un curso y devuelve el ID creado.
+    Se devuelve el ID para poder asociar horarios manuales inmediatamente.
+    """
+    with conectar() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO cursos (estudiante_id, nombre_curso, codigo_curso, docente, creditos, dificultad, estado, fecha_registro)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (estudiante_id, nombre_curso, codigo_curso, docente, creditos, dificultad, estado, datetime.now()),
+            )
+            curso_id = cur.fetchone()[0]
+        conn.commit()
+    return curso_id
 
 
 def listar_cursos_por_estudiante(estudiante_id: int):
@@ -896,6 +905,11 @@ def registrar_horario_clase(estudiante_id: int, curso_id: Optional[int], codigo_
         """,
         (estudiante_id, curso_id, codigo_curso, nombre_curso, tipo, docente, dia, hora_inicio, hora_fin, aula, color, datetime.now()),
     )
+
+
+def eliminar_horario_clase(horario_id: int):
+    _execute("DELETE FROM horarios_clase WHERE id = %s", (horario_id,))
+    return True
 
 
 def limpiar_horarios_clase(estudiante_id: int):
