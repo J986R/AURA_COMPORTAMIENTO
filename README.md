@@ -1,33 +1,25 @@
-# AURA WEB - Planificador mejorado
+# AURA WEB - versión tareas, calendario y UI mejorada
 
-Versión con:
+Cambios principales:
 
-- Planificador semanal y mensual.
-- Plan desde la fecha actual.
-- Asignación antes o máximo en la fecha de entrega.
-- Bloques de almuerzo y descanso.
-- Mayor carga de estudio según dificultad del curso.
-- Calendario visual mejorado.
-- Interfaz con paleta pastel inspirada en el logo de AURA.
+- Tipos de actividad: Tarea, Monografía, Práctica calificada, Examen parcial y Examen final.
+- El planificador considera el tipo de actividad y la dificultad del curso para asignar más o menos días/horas.
+- Menú reorganizado: Dashboard Estudiante, Diagnóstico Académico, Perfil Académico, Tareas y Planificador, Coach IA y Reportes.
+- Calendario semanal/mensual con estilo similar a Google Calendar.
+- Dashboard con gráficos horizontales más legibles.
+- Botones e interfaz con estilo pastel, redondeado y minimalista.
+- Controles de música opcionales: sube un archivo `assets/background.mp3` para activar el reproductor en la barra lateral.
 
-## Archivos principales
+## Archivos a subir a GitHub
 
-- `app.py`
-- `database.py`
-- `ai_engine.py`
-- `planner.py`
-- `report_generator.py`
-- `boleta_parser.py`
-- `requirements.txt`
-
-## Secrets de Streamlit
+Reemplaza los archivos del repositorio con los de esta carpeta. Mantén tus Secrets de Streamlit:
 
 ```toml
-NEON_DATABASE_URL = "postgresql://usuario:password@host.neon.tech/neondb?sslmode=require"
-GEMINI_API_KEY = "TU_API_KEY"
+NEON_DATABASE_URL = "..."
+GEMINI_API_KEY = "..."
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 ```
 
-## Despliegue
+## Notas
 
-Sube los archivos al repositorio GitHub y reinicia la app en Streamlit Cloud si no actualiza automáticamente.
+La app crea automáticamente la columna `tipo_actividad` en la tabla `tareas` si todavía no existe.

@@ -149,6 +149,7 @@ def crear_tablas():
                     titulo TEXT NOT NULL,
                     descripcion TEXT,
                     fecha_entrega DATE,
+                    tipo_actividad TEXT DEFAULT 'Tarea',
                     prioridad TEXT,
                     estado TEXT,
                     fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -206,6 +207,7 @@ def crear_tablas():
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS recomendacion_estudiante_ia TEXT",
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS recomendacion_tutoria_ia TEXT",
                 "ALTER TABLE cursos ADD COLUMN IF NOT EXISTS codigo_curso TEXT",
+                "ALTER TABLE tareas ADD COLUMN IF NOT EXISTS tipo_actividad TEXT DEFAULT 'Tarea'",
                 "ALTER TABLE horarios_clase ADD COLUMN IF NOT EXISTS color TEXT",
             ]
             for sql in migraciones:
@@ -562,7 +564,7 @@ def eliminar_curso(curso_id: int):
     _execute("DELETE FROM cursos WHERE id = %s", (curso_id,))
 
 
-def calcular_prioridad_tarea(fecha_entrega, dificultad: int):
+def calcular_prioridad_tarea(fecha_entrega, dificultad: int, tipo_actividad: str = "Tarea"):
     if not fecha_entrega:
         return "Media"
     hoy = datetime.now().date()
@@ -571,28 +573,42 @@ def calcular_prioridad_tarea(fecha_entrega, dificultad: int):
     else:
         entrega = fecha_entrega
     dias = (entrega - hoy).days
-    if dias <= 1 or dificultad >= 5:
+    tipo = (tipo_actividad or "Tarea").lower()
+    peso_tipo = 0
+    if "final" in tipo:
+        peso_tipo = 4
+    elif "parcial" in tipo:
+        peso_tipo = 3
+    elif "monografía" in tipo or "monografia" in tipo:
+        peso_tipo = 3
+    elif "práctica" in tipo or "practica" in tipo:
+        peso_tipo = 2
+    try:
+        dificultad = int(dificultad or 3)
+    except Exception:
+        dificultad = 3
+    if dias <= 1 or dificultad >= 5 or peso_tipo >= 4:
         return "Alta"
-    if dias <= 3 or dificultad >= 4:
+    if dias <= 3 or dificultad >= 4 or peso_tipo >= 2:
         return "Media"
     return "Baja"
 
 
-def registrar_tarea(estudiante_id: int, curso_id: int, titulo: str, descripcion: str, fecha_entrega: str, dificultad: int):
-    prioridad = calcular_prioridad_tarea(fecha_entrega, dificultad)
+def registrar_tarea(estudiante_id: int, curso_id: int, titulo: str, descripcion: str, fecha_entrega: str, dificultad: int, tipo_actividad: str = "Tarea"):
+    prioridad = calcular_prioridad_tarea(fecha_entrega, dificultad, tipo_actividad)
     _execute(
         """
-        INSERT INTO tareas (estudiante_id, curso_id, titulo, descripcion, fecha_entrega, prioridad, estado, fecha_registro)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO tareas (estudiante_id, curso_id, titulo, descripcion, fecha_entrega, tipo_actividad, prioridad, estado, fecha_registro)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (estudiante_id, curso_id, titulo, descripcion, fecha_entrega, prioridad, "Pendiente", datetime.now()),
+        (estudiante_id, curso_id, titulo, descripcion, fecha_entrega, tipo_actividad, prioridad, "Pendiente", datetime.now()),
     )
 
 
 def listar_tareas_por_estudiante(estudiante_id: int):
     return _fetchall(
         """
-        SELECT t.id, t.titulo, c.nombre_curso, t.fecha_entrega, t.prioridad, t.estado
+        SELECT t.id, COALESCE(t.tipo_actividad, 'Tarea') AS tipo_actividad, t.titulo, c.nombre_curso, t.fecha_entrega, t.prioridad, t.estado
         FROM tareas t
         INNER JOIN cursos c ON t.curso_id = c.id
         WHERE t.estudiante_id = %s
@@ -605,7 +621,7 @@ def listar_tareas_por_estudiante(estudiante_id: int):
 def listar_tareas_para_planificador(estudiante_id: int):
     filas = _fetchall(
         """
-        SELECT t.id, t.titulo, c.nombre_curso, t.fecha_entrega, t.prioridad, t.estado, c.dificultad, COALESCE(t.descripcion, '')
+        SELECT t.id, t.titulo, c.nombre_curso, t.fecha_entrega, t.prioridad, t.estado, c.dificultad, COALESCE(t.descripcion, ''), COALESCE(t.tipo_actividad, 'Tarea')
         FROM tareas t
         INNER JOIN cursos c ON t.curso_id = c.id
         WHERE t.estudiante_id = %s
@@ -625,6 +641,7 @@ def listar_tareas_para_planificador(estudiante_id: int):
                 "estado": f[5],
                 "dificultad": f[6],
                 "descripcion": f[7],
+                "tipo_actividad": f[8],
             }
         )
     return tareas
@@ -654,7 +671,7 @@ def obtener_tarea_por_id(tarea_id: int):
     return _fetchone(
         """
         SELECT t.id, t.estudiante_id, t.curso_id, t.titulo, COALESCE(t.descripcion, ''),
-               t.fecha_entrega, t.prioridad, t.estado, c.nombre_curso, c.dificultad
+               t.fecha_entrega, t.prioridad, t.estado, c.nombre_curso, c.dificultad, COALESCE(t.tipo_actividad, 'Tarea')
         FROM tareas t
         INNER JOIN cursos c ON t.curso_id = c.id
         WHERE t.id = %s
@@ -663,8 +680,8 @@ def obtener_tarea_por_id(tarea_id: int):
     )
 
 
-def actualizar_tarea(tarea_id: int, curso_id: int, titulo: str, descripcion: str, fecha_entrega: str, estado: str, dificultad: int):
-    prioridad = calcular_prioridad_tarea(fecha_entrega, dificultad)
+def actualizar_tarea(tarea_id: int, curso_id: int, titulo: str, descripcion: str, fecha_entrega: str, estado: str, dificultad: int, tipo_actividad: str = "Tarea"):
+    prioridad = calcular_prioridad_tarea(fecha_entrega, dificultad, tipo_actividad)
     _execute(
         """
         UPDATE tareas
@@ -672,11 +689,12 @@ def actualizar_tarea(tarea_id: int, curso_id: int, titulo: str, descripcion: str
             titulo = %s,
             descripcion = %s,
             fecha_entrega = %s,
+            tipo_actividad = %s,
             prioridad = %s,
             estado = %s
         WHERE id = %s
         """,
-        (curso_id, titulo, descripcion, fecha_entrega, prioridad, estado, tarea_id),
+        (curso_id, titulo, descripcion, fecha_entrega, tipo_actividad, prioridad, estado, tarea_id),
     )
     return True, "Tarea actualizada correctamente."
 

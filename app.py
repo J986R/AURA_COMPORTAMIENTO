@@ -54,6 +54,7 @@ from planner import generar_plan_calendario_respaldo, dias_restantes_mes
 from report_generator import crear_excel_reporte, crear_pdf_reporte
 
 LOGO_PATH = Path(__file__).parent / "assets" / "logo_aura.png"
+AUDIO_PATH = Path(__file__).parent / "assets" / "background.mp3"
 
 st.set_page_config(page_title="AURA - Coach Académico Inteligente", page_icon="🎓", layout="wide")
 
@@ -83,6 +84,8 @@ PREGUNTAS_DIAGNOSTICO = [
 ESCALA_OPCIONES = ["1 - Nunca", "2 - Casi nunca", "3 - A veces", "4 - Casi siempre", "5 - Siempre"]
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 PALETA = ["#BDE0FE", "#A7F3D0", "#DDD6FE", "#FDE68A", "#FBCFE8", "#BFDBFE", "#C7D2FE"]
+TIPOS_ACTIVIDAD = ["Tarea", "Monografía", "Práctica calificada", "Examen parcial", "Examen final"]
+COLOR_TIPO = {"Tarea": "#A7F3D0", "Monografía": "#DDD6FE", "Práctica calificada": "#FDE68A", "Examen parcial": "#FBCFE8", "Examen final": "#FCA5A5"}
 
 
 def aplicar_estilos():
@@ -181,6 +184,27 @@ def aplicar_estilos():
         .aura-day-number{font-weight:900;margin-bottom:6px;color:#24324B;}
         .aura-month-event{font-size:11px;line-height:1.2;border-radius:10px;padding:5px 6px;margin-bottom:5px;color:#24324B;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(255,255,255,.55);}
         .aura-muted{color:#64748B;font-size:.92rem;}
+        
+        .stTabs [data-baseweb="tab-list"]{gap:8px;background:rgba(255,255,255,.65);padding:6px;border-radius:20px;}
+        .stTabs [data-baseweb="tab"]{border-radius:16px;padding:8px 16px;font-weight:800;}
+        .stRadio [role="radiogroup"]{background:rgba(255,255,255,.70);border-radius:18px;padding:6px;}
+        .aura-dashboard-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:12px 0 20px 0;}
+        .aura-stat{background:linear-gradient(135deg,rgba(255,255,255,.92),rgba(248,251,255,.92));border:1px solid rgba(148,163,184,.16);border-radius:24px;padding:16px;box-shadow:0 10px 26px rgba(96,165,250,.10);}
+        .aura-stat .label{font-size:12px;color:#64748B;font-weight:800;text-transform:uppercase;letter-spacing:.04em;}
+        .aura-stat .value{font-size:28px;color:#24324B;font-weight:950;margin-top:4px;}
+        .aura-calendar-toolbar{display:flex;justify-content:space-between;align-items:center;background:#F8FAFF;border:1px solid rgba(148,163,184,.18);border-radius:28px;padding:12px 16px;margin:10px 0 8px 0;box-shadow:0 10px 28px rgba(96,165,250,.08);}
+        .aura-toolbar-left{display:flex;gap:10px;align-items:center;font-weight:900;color:#24324B;}
+        .aura-icon-btn{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:9px 15px;font-weight:900;color:#24324B;background:linear-gradient(135deg,#FFFFFF,#EEF6FF);border:1px solid rgba(148,163,184,.20);}
+        .aura-event.examen{background:#FCA5A5!important;color:#2A1C1C;}
+        .aura-event.monografia{background:#DDD6FE!important;}
+        .aura-event.practica{background:#FDE68A!important;}
+        .aura-event.tarea{background:#A7F3D0!important;}
+        .aura-month-event.examen{background:#FCA5A5!important;}
+        .aura-month-event.monografia{background:#DDD6FE!important;}
+        .aura-month-event.practica{background:#FDE68A!important;}
+        .aura-month-event.tarea{background:#A7F3D0!important;}
+        .aura-player{position:fixed;right:22px;bottom:22px;z-index:9999;background:rgba(255,255,255,.90);border:1px solid rgba(148,163,184,.18);border-radius:22px;padding:10px 12px;box-shadow:0 12px 28px rgba(15,23,42,.16);backdrop-filter:blur(10px);}
+        @media(max-width:900px){.aura-dashboard-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.aura-cal-head,.aura-cal-body{grid-template-columns:58px repeat(7,170px);overflow-x:auto;}.aura-calendar{overflow-x:auto;}}
         </style>
         """,
         unsafe_allow_html=True,
@@ -207,6 +231,15 @@ def mostrar_logo(ancho=230):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.image(str(LOGO_PATH), width=ancho)
+
+
+def mostrar_musica():
+    with st.sidebar.expander("🎵 Música de fondo", expanded=False):
+        st.caption("Los navegadores requieren que el usuario presione reproducir. Sube un archivo como assets/background.mp3 para activar la música.")
+        if AUDIO_PATH.exists():
+            st.audio(str(AUDIO_PATH), format="audio/mp3", loop=True)
+        else:
+            st.info("Aún no hay música cargada. Agrega assets/background.mp3 al repositorio.")
 
 
 def mostrar_hero(titulo="AURA", subtitulo="Academic University Recommendation Assistant"):
@@ -372,6 +405,12 @@ def render_calendario(horarios=None, bloques_estudio=None, titulo="Calendario se
     min_hour, max_hour, px_h = 7, 23, 60
     height = (max_hour - min_hour) * px_h
 
+    toolbar = f"""
+    <div class='aura-calendar-toolbar'>
+        <div class='aura-toolbar-left'><span class='aura-icon-btn'>☰</span><span class='aura-icon-btn'>📅 Hoy</span><span>{escape(titulo)}</span></div>
+        <div><span class='aura-icon-btn'>🔎 Buscar</span><span class='aura-icon-btn'>⚙️ Semana</span></div>
+    </div>
+    """
     head_cells = ["<div>GMT-05</div>"]
     for f in fechas[:7]:
         head_cells.append(f"<div><small>{fecha_a_dia(f)[:3].upper()}</small><br><b>{f.day}</b></div>")
@@ -397,18 +436,35 @@ def render_calendario(horarios=None, bloques_estudio=None, titulo="Calendario se
             hgt = max(30, (fin - ini) * px_h - 4)
             color = escape(b.get("color") or ("#BDE0FE" if b.get("tipo") == "Clase" else "#A7F3D0"))
             tipo_lower = str(b.get("tipo", "")).lower()
-            clase = "clase" if "clase" in tipo_lower else ("descanso" if "almuerzo" in tipo_lower or "descanso" in tipo_lower else "estudio")
+            act_lower = str(b.get("tipo_actividad", b.get("actividad", ""))).lower()
+            if "clase" in tipo_lower:
+                clase = "clase"
+            elif "almuerzo" in tipo_lower or "descanso" in tipo_lower:
+                clase = "descanso"
+            elif "final" in act_lower or "parcial" in act_lower or "examen" in act_lower:
+                clase = "estudio examen"
+            elif "monograf" in act_lower:
+                clase = "estudio monografia"
+            elif "práctica" in act_lower or "practica" in act_lower:
+                clase = "estudio practica"
+            elif "tarea" in act_lower:
+                clase = "estudio tarea"
+            else:
+                clase = "estudio"
             titulo_b = escape(b.get("curso", "Actividad"))
             actividad = escape(b.get("actividad", ""))
             hora = f"{escape(b.get('inicio'))} - {escape(b.get('fin'))}"
             tarea = escape(b.get("tarea_origen", ""))
+            tipo_act = escape(b.get("tipo_actividad", ""))
+            if tipo_act:
+                tarea = f"{tipo_act} · {tarea}" if tarea else tipo_act
             events.append(
                 f"<div class='aura-event {clase}' style='top:{top}px;height:{hgt}px;background:{color};'>"
                 f"<b>{titulo_b}</b><br><span>{actividad}</span><small>{hora}</small><small>{tarea}</small></div>"
             )
         cols.append(f"<div class='aura-day-col'>{''.join(events)}</div>")
     body = f"<div class='aura-cal-body' style='height:{height}px;'>" + "".join(cols) + "</div>"
-    st.subheader(titulo)
+    st.markdown(toolbar, unsafe_allow_html=True)
     st.markdown(f"<div class='aura-calendar'>{head}{body}</div>", unsafe_allow_html=True)
 
 
@@ -443,8 +499,18 @@ def render_calendario_mensual(horarios=None, bloques_estudio=None, titulo="Calen
         ev_html = ""
         for e in eventos:
             color = escape(e.get("color") or "#A7F3D0")
+            act_lower = str(e.get("tipo_actividad", e.get("actividad", ""))).lower()
+            clase_ev = ""
+            if "final" in act_lower or "parcial" in act_lower or "examen" in act_lower:
+                clase_ev = " examen"
+            elif "monograf" in act_lower:
+                clase_ev = " monografia"
+            elif "práctica" in act_lower or "practica" in act_lower:
+                clase_ev = " practica"
+            elif "tarea" in act_lower:
+                clase_ev = " tarea"
             etiqueta = escape(f"{e.get('inicio','')} {e.get('curso','')} · {e.get('actividad','')}")
-            ev_html += f"<div class='aura-month-event' style='background:{color};'>{etiqueta}</div>"
+            ev_html += f"<div class='aura-month-event{clase_ev}' style='background:{color};'>{etiqueta}</div>"
         if len(por_fecha.get(f.isoformat(), [])) > 5:
             ev_html += f"<div class='aura-muted'>+{len(por_fecha[f.isoformat()])-5} más</div>"
         marca_hoy = " style='outline:2px solid #60A5FA;'" if f == date.today() else ""
@@ -500,15 +566,16 @@ st.sidebar.success(f"👤 Usuario: {usuario_actual['username']}")
 st.sidebar.info(f"🛡️ Rol: {rol_actual}")
 if st.sidebar.button("🚪 Cerrar sesión"):
     cerrar_sesion()
+mostrar_musica()
 
 if rol_actual == "Administrador":
-    opciones_menu = ["Inicio", "Dashboard estudiante", "Perfil y Cursos", "Diagnóstico académico", "Tareas y Planificador", "Coach IA", "Panel de Tutoría", "Gestión de usuarios", "Reportes", "Exportar datos"]
+    opciones_menu = ["Dashboard Estudiante", "Diagnóstico Académico", "Perfil Académico", "Tareas y Planificador", "Coach IA", "Reportes", "Panel de Tutoría", "Gestión de usuarios", "Exportar datos"]
     default_index = 0
 elif rol_actual == "Tutor":
-    opciones_menu = ["Dashboard estudiante", "Perfil y Cursos", "Diagnóstico académico", "Tareas y Planificador", "Coach IA", "Panel de Tutoría", "Reportes"]
+    opciones_menu = ["Dashboard Estudiante", "Diagnóstico Académico", "Perfil Académico", "Tareas y Planificador", "Coach IA", "Reportes", "Panel de Tutoría"]
     default_index = 0
 else:
-    opciones_menu = ["Dashboard estudiante", "Perfil y Cursos", "Diagnóstico académico", "Tareas y Planificador", "Coach IA", "Reportes"]
+    opciones_menu = ["Dashboard Estudiante", "Diagnóstico Académico", "Perfil Académico", "Tareas y Planificador", "Coach IA", "Reportes"]
     default_index = 0
 
 menu = st.sidebar.radio("Menú principal", opciones_menu, index=default_index)
@@ -528,8 +595,8 @@ if menu == "Inicio":
     )
     st.info("Flujo recomendado: importar boleta → diagnóstico IA → tareas → planificador calendario → coach IA → reportes.")
 
-elif menu == "Dashboard estudiante":
-    st.header("📊 Dashboard del estudiante")
+elif menu == "Dashboard Estudiante":
+    st.header("📊 Dashboard Estudiante")
     estudiante_id, estudiante_texto = seleccionar_estudiante()
     if estudiante_id is not None:
         diagnostico = obtener_ultimo_diagnostico(estudiante_id)
@@ -564,12 +631,18 @@ elif menu == "Dashboard estudiante":
                     "Indicador": ["Estrés", "Procrastinación", "Motivación", "Estado de ánimo"],
                     "Nivel": [detalle.get("indice_estres") if detalle else estres, detalle.get("indice_procrastinacion") if detalle else procrast, detalle.get("indice_motivacion") if detalle else motivacion, detalle.get("indice_estado_animo") if detalle else 3],
                 })
-                st.plotly_chart(px.bar(df_ind, x="Indicador", y="Nivel", text="Nivel", range_y=[0, 5], color="Indicador", color_discrete_sequence=PALETA), use_container_width=True)
+                fig_ind = px.bar(df_ind, x="Nivel", y="Indicador", orientation="h", text="Nivel", range_x=[0, 5], color="Indicador", color_discrete_sequence=PALETA)
+                fig_ind.update_traces(textposition="outside", marker_line_width=1, marker_line_color="rgba(255,255,255,.9)")
+                fig_ind.update_layout(height=340, margin=dict(l=8, r=32, t=24, b=8), showlegend=False, plot_bgcolor="rgba(255,255,255,0)", paper_bgcolor="rgba(255,255,255,0)")
+                st.plotly_chart(fig_ind, use_container_width=True)
             with col2:
                 st.subheader("Cursos con mayor dificultad")
                 if cursos_dificultad:
                     df_dif = pd.DataFrame(cursos_dificultad, columns=["Curso", "Dificultad"])
-                    st.plotly_chart(px.bar(df_dif, x="Curso", y="Dificultad", text="Dificultad", range_y=[0, 5], color="Curso", color_discrete_sequence=PALETA), use_container_width=True)
+                    fig_dif = px.bar(df_dif, x="Dificultad", y="Curso", orientation="h", text="Dificultad", range_x=[0, 5], color="Curso", color_discrete_sequence=PALETA)
+                    fig_dif.update_traces(textposition="outside", marker_line_width=1, marker_line_color="rgba(255,255,255,.9)")
+                    fig_dif.update_layout(height=340, margin=dict(l=8, r=32, t=24, b=8), showlegend=False, plot_bgcolor="rgba(255,255,255,0)", paper_bgcolor="rgba(255,255,255,0)")
+                    st.plotly_chart(fig_dif, use_container_width=True)
                 else:
                     st.info("Aún no hay cursos registrados.")
 
@@ -583,8 +656,8 @@ elif menu == "Dashboard estudiante":
         bloques_estudio = (ultimo_plan or {}).get("plan", []) if ultimo_plan else []
         render_calendario(horarios, bloques_estudio, "🗓️ Calendario semanal: clases y plan de estudio")
 
-elif menu == "Perfil y Cursos":
-    st.header("👤 Perfil y Cursos")
+elif menu == "Perfil Académico":
+    st.header("👤 Perfil Académico")
     estudiante_id, estudiante_texto = seleccionar_estudiante()
     if estudiante_id is not None:
         estudiante = obtener_estudiante_por_id(estudiante_id)
@@ -695,7 +768,7 @@ elif menu == "Perfil y Cursos":
             st.success("Horarios eliminados.")
             st.rerun()
 
-elif menu == "Diagnóstico académico":
+elif menu == "Diagnóstico Académico":
     st.header("🧠 Diagnóstico académico y bienestar con IA")
     estudiante_id, estudiante_texto = seleccionar_estudiante()
     if estudiante_id is not None:
@@ -754,9 +827,10 @@ elif menu == "Tareas y Planificador":
                 opciones_cursos = {f"{c[1]} | Dificultad {c[4]}": c for c in cursos}
                 with st.form("form_add_tarea"):
                     curso_txt = st.selectbox("Curso", list(opciones_cursos.keys()))
-                    titulo = st.text_input("Título de la tarea")
+                    tipo_actividad = st.selectbox("Tipo de actividad", TIPOS_ACTIVIDAD, help="Tarea = básica; Monografía = más días; Práctica = repaso medio; Exámenes = más preparación")
+                    titulo = st.text_input("Título de la actividad")
                     descripcion = st.text_area("Descripción")
-                    fecha_entrega = st.date_input("Fecha de entrega", value=date.today())
+                    fecha_entrega = st.date_input("Fecha de entrega / evaluación", value=date.today())
                     if st.form_submit_button("Guardar tarea"):
                         curso = opciones_cursos[curso_txt]
                         if not titulo.strip():
@@ -764,14 +838,14 @@ elif menu == "Tareas y Planificador":
                         elif existe_tarea(estudiante_id, curso[0], titulo):
                             st.warning("Esta tarea ya existe para este curso.")
                         else:
-                            registrar_tarea(estudiante_id, curso[0], titulo, descripcion, fecha_entrega.strftime("%Y-%m-%d"), int(curso[4] or 3))
+                            registrar_tarea(estudiante_id, curso[0], titulo, descripcion, fecha_entrega.strftime("%Y-%m-%d"), int(curso[4] or 3), tipo_actividad)
                             st.success("Tarea registrada.")
                             st.rerun()
 
         if tareas:
-            st.dataframe(pd.DataFrame(tareas, columns=["ID", "Tarea", "Curso", "Fecha de entrega", "Prioridad", "Estado"]), use_container_width=True)
+            st.dataframe(pd.DataFrame(tareas, columns=["ID", "Tipo", "Actividad", "Curso", "Fecha de entrega", "Prioridad", "Estado"]), use_container_width=True)
             with st.expander("✏️ Editar o eliminar tarea"):
-                opciones_t = {f"{t[1]} | {t[2]} | {t[5]}": t[0] for t in tareas}
+                opciones_t = {f"{t[2]} | {t[3]} | {t[1]} | {t[6]}": t[0] for t in tareas}
                 tarea_sel = st.selectbox("Tarea", list(opciones_t.keys()))
                 tarea_id = opciones_t[tarea_sel]
                 tarea_info = obtener_tarea_por_id(tarea_id)
@@ -781,15 +855,17 @@ elif menu == "Tareas y Planificador":
                     with st.form("form_edit_tarea"):
                         curso_opciones = {c[1]: c for c in cursos}
                         curso_nombre = st.selectbox("Curso", list(curso_opciones.keys()), index=idx_curso)
+                        tipo_actual = tarea_info[10] if len(tarea_info) > 10 and tarea_info[10] in TIPOS_ACTIVIDAD else "Tarea"
+                        e_tipo = st.selectbox("Tipo de actividad", TIPOS_ACTIVIDAD, index=TIPOS_ACTIVIDAD.index(tipo_actual))
                         e_titulo = st.text_input("Título", value=tarea_info[3] or "")
                         e_desc = st.text_area("Descripción", value=tarea_info[4] or "")
-                        e_fecha = st.date_input("Fecha de entrega", value=tarea_info[5] or date.today())
+                        e_fecha = st.date_input("Fecha de entrega / evaluación", value=tarea_info[5] or date.today())
                         estados = ["Pendiente", "En proceso", "Completada"]
                         e_estado = st.selectbox("Estado", estados, index=estados.index(tarea_info[7]) if tarea_info[7] in estados else 0)
                         colg, colb = st.columns(2)
                         if colg.form_submit_button("💾 Actualizar tarea"):
                             curso_nuevo = curso_opciones[curso_nombre]
-                            actualizar_tarea(tarea_id, curso_nuevo[0], e_titulo, e_desc, e_fecha.strftime("%Y-%m-%d"), e_estado, int(curso_nuevo[4] or 3))
+                            actualizar_tarea(tarea_id, curso_nuevo[0], e_titulo, e_desc, e_fecha.strftime("%Y-%m-%d"), e_estado, int(curso_nuevo[4] or 3), e_tipo)
                             st.success("Tarea actualizada.")
                             st.rerun()
                         if colb.form_submit_button("🗑️ Eliminar tarea"):

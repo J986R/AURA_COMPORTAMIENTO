@@ -106,7 +106,7 @@ def crear_excel_reporte(nombre, codigo, carrera, ciclo, diagnostico, diagnostico
     _ajustar_columnas(ws_cursos)
 
     ws_tareas = wb.create_sheet("Tareas")
-    ws_tareas.append(["ID", "Tarea", "Curso", "Fecha de entrega", "Prioridad", "Estado"])
+    ws_tareas.append(["ID", "Tipo", "Actividad", "Curso", "Fecha de entrega", "Prioridad", "Estado"])
     for t in tareas:
         ws_tareas.append([_safe(x) for x in t])
     for cell in ws_tareas[1]:
@@ -242,10 +242,14 @@ def crear_pdf_reporte(nombre, codigo, carrera, ciclo, diagnostico, diagnostico_d
     elems.append(PageBreak())
     elems.append(Paragraph("Tareas registradas", h2))
     if tareas:
-        data = [[_paragraph("Tarea", small), _paragraph("Curso", small), _paragraph("Entrega", small), _paragraph("Prioridad", small), _paragraph("Estado", small)]]
+        data = [[_paragraph("Tipo", small), _paragraph("Actividad", small), _paragraph("Curso", small), _paragraph("Entrega", small), _paragraph("Estado", small)]]
         for t in tareas:
-            data.append([_paragraph(t[1], small), _paragraph(t[2], small), _paragraph(t[3], small), _paragraph(t[4], small), _paragraph(t[5], small)])
-        tabla = Table(data, colWidths=[4.8 * cm, 4.0 * cm, 2.5 * cm, 2.2 * cm, 2.5 * cm], repeatRows=1)
+            # Formato actual: ID, Tipo, Actividad, Curso, Fecha, Prioridad, Estado.
+            if len(t) >= 7:
+                data.append([_paragraph(t[1], small), _paragraph(t[2], small), _paragraph(t[3], small), _paragraph(t[4], small), _paragraph(t[6], small)])
+            else:
+                data.append([_paragraph("Tarea", small), _paragraph(t[1], small), _paragraph(t[2], small), _paragraph(t[3], small), _paragraph(t[5], small)])
+        tabla = Table(data, colWidths=[2.6 * cm, 4.2 * cm, 4.0 * cm, 2.3 * cm, 2.3 * cm], repeatRows=1)
         tabla.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 0.25, colors.lightgrey),
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D9EAF7")),

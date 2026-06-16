@@ -328,7 +328,13 @@ Reglas obligatorias:
 - No coloques bloques durante almuerzo ({almuerzo_inicio}-{almuerzo_fin}).
 - Evita programar estudio antes de 07:00 o después de 23:00.
 - Los cursos de dificultad 4 o 5 deben recibir más horas y más anticipación.
-- Una tarea extensa, difícil o de prioridad alta debe dividirse en varios bloques durante varios días cuando haya tiempo.
+- Considera el campo tipo_actividad: Tarea, Monografía, Práctica calificada, Examen parcial o Examen final.
+- Las tareas son más básicas y demandan menos tiempo.
+- Las monografías demandan más tiempo, normalmente alrededor de una semana si la fecha lo permite.
+- Las prácticas calificadas requieren práctica, pero menos carga que exámenes parciales o finales.
+- Los exámenes parciales y finales deben tener más bloques de estudio previos; el final debe ser el de mayor preparación.
+- Ajusta la cantidad de días y horas según la dificultad del curso: dificultad 4 o 5 requiere más anticipación y más horas.
+- Una tarea extensa, difícil, de examen, monografía o prioridad alta debe dividirse en varios bloques durante varios días cuando haya tiempo.
 - Cada bloque debe durar entre 45 minutos y 2 horas.
 - No concentres todo en un solo día si la fecha de entrega permite distribuirlo.
 - Total aproximado de horas de estudio no debe superar las horas disponibles proporcionales al horizonte.
@@ -346,6 +352,7 @@ Devuelve SOLO JSON válido con este formato:
       "curso": "Mercadotecnia",
       "actividad": "Hacer borrador del trabajo",
       "tarea_origen": "Trabajo parcial",
+      "tipo_actividad": "Examen parcial",
       "prioridad": "Alta",
       "color": "#A7F3D0",
       "fecha_entrega": "YYYY-MM-DD"
@@ -386,6 +393,7 @@ Devuelve SOLO JSON válido con este formato:
                 "curso": str(b.get("curso", "Estudio")),
                 "actividad": str(b.get("actividad", "Bloque de estudio")),
                 "tarea_origen": str(b.get("tarea_origen", "")),
+                "tipo_actividad": str(b.get("tipo_actividad", "Estudio")),
                 "prioridad": str(b.get("prioridad", "Media")),
                 "color": str(b.get("color", "#A7F3D0")),
                 "fecha_entrega": str(b.get("fecha_entrega", ""))[:10],

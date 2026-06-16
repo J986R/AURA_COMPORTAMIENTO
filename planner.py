@@ -87,25 +87,52 @@ def calcular_puntaje_planificacion(fecha_entrega, prioridad, dificultad, estado)
 
 
 def estimar_horas_tarea(tarea: dict) -> float:
+    """Estima horas según tipo de actividad + dificultad + urgencia.
+
+    Reglas base:
+    - Tarea: actividad básica y más fácil.
+    - Monografía: demanda aproximadamente una semana de trabajo distribuido.
+    - Práctica calificada: requiere repaso, pero menos que parcial/final.
+    - Examen parcial: alta preparación.
+    - Examen final: preparación máxima.
+    La dificultad del curso multiplica la carga.
+    """
     dificultad = int(tarea.get("dificultad") or 3)
     prioridad = tarea.get("prioridad") or "Media"
     estado = tarea.get("estado") or "Pendiente"
-    # Mayor dificultad = más horas y más bloques.
-    base_por_dificultad = {1: 1.0, 2: 1.5, 3: 2.25, 4: 3.25, 5: 4.5}
-    horas = base_por_dificultad.get(dificultad, 2.25)
+    tipo = (tarea.get("tipo_actividad") or "Tarea").lower()
+
+    if "final" in tipo:
+        horas = 9.0
+    elif "parcial" in tipo:
+        horas = 7.0
+    elif "monografía" in tipo or "monografia" in tipo:
+        horas = 8.0
+    elif "práctica" in tipo or "practica" in tipo:
+        horas = 4.5
+    else:
+        horas = 2.0
+
+    # Ajuste por dificultad: dificultad 5 puede casi duplicar la carga de una tarea simple.
+    factor_dificultad = {1: 0.75, 2: 0.9, 3: 1.0, 4: 1.25, 5: 1.55}.get(dificultad, 1.0)
+    horas *= factor_dificultad
+
     if prioridad == "Alta":
-        horas += 1.25
-    elif prioridad == "Media":
-        horas += 0.6
+        horas *= 1.15
+    elif prioridad == "Baja":
+        horas *= 0.9
     if estado == "En proceso":
-        horas *= 0.65
+        horas *= 0.70
+
     entrega = normalizar_fecha(tarea.get("fecha_entrega"), date.today() + timedelta(days=15))
     dias = (entrega - date.today()).days
+    # Si vence muy pronto, concentramos más horas, pero el plan no debe pasar del vencimiento.
     if dias <= 1:
-        horas += 0.75
+        horas *= 1.15
     elif dias <= 3:
-        horas += 0.35
-    return round(min(max(horas, 0.75), 7.0), 2)
+        horas *= 1.08
+
+    return round(min(max(horas, 0.75), 18.0), 2)
 
 
 def construir_ocupados_por_fecha(
@@ -268,15 +295,39 @@ def generar_plan_calendario_respaldo(
                     prioridad = "Alta"
                     color = "#FCA5A5"
                 elif avance == 1:
-                    actividad = "Revisar indicaciones y avanzar primera parte"
+                    tipo_act = tarea.get("tipo_actividad", "Tarea")
+                    if "Examen" in tipo_act:
+                        actividad = "Repasar teoría base y organizar temas críticos"
+                    elif "Monografía" in tipo_act:
+                        actividad = "Definir estructura, fuentes y primer esquema"
+                    elif "Práctica" in tipo_act:
+                        actividad = "Repasar fórmulas y resolver ejercicios tipo"
+                    else:
+                        actividad = "Revisar indicaciones y avanzar primera parte"
                     prioridad = tarea.get("prioridad", "Media")
                     color = COLORES_ESTUDIO[idx % len(COLORES_ESTUDIO)]
                 elif horas_asignadas + duracion >= horas_objetivo - 0.1 or f == entrega:
-                    actividad = "Revisar, corregir y dejar listo para entrega"
+                    tipo_act = tarea.get("tipo_actividad", "Tarea")
+                    if "Examen" in tipo_act:
+                        actividad = "Simulacro, repaso final y puntos débiles"
+                    elif "Monografía" in tipo_act:
+                        actividad = "Revisar, corregir citas y dejar listo para entrega"
+                    elif "Práctica" in tipo_act:
+                        actividad = "Practicar ejercicios finales y revisar errores"
+                    else:
+                        actividad = "Revisar, corregir y dejar listo para entrega"
                     prioridad = tarea.get("prioridad", "Media")
                     color = COLORES_ESTUDIO[idx % len(COLORES_ESTUDIO)]
                 else:
-                    actividad = "Desarrollar avance principal de la tarea"
+                    tipo_act = tarea.get("tipo_actividad", "Tarea")
+                    if "Examen" in tipo_act:
+                        actividad = "Estudio profundo por temas y práctica guiada"
+                    elif "Monografía" in tipo_act:
+                        actividad = "Redactar desarrollo y consolidar contenido"
+                    elif "Práctica" in tipo_act:
+                        actividad = "Resolver batería de ejercicios"
+                    else:
+                        actividad = "Desarrollar avance principal de la tarea"
                     prioridad = tarea.get("prioridad", "Media")
                     color = COLORES_ESTUDIO[idx % len(COLORES_ESTUDIO)]
                 bloques.append({
@@ -288,6 +339,7 @@ def generar_plan_calendario_respaldo(
                     "curso": tarea.get("curso", "Curso"),
                     "actividad": actividad,
                     "tarea_origen": tarea.get("titulo", "Tarea"),
+                    "tipo_actividad": tarea.get("tipo_actividad", "Tarea"),
                     "prioridad": prioridad,
                     "color": color,
                     "fecha_entrega": entrega.isoformat(),
