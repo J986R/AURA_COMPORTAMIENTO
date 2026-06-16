@@ -917,7 +917,8 @@ elif menu == "Perfil Académico":
         st.divider()
         st.subheader("🔐 Importar desde INTRALU")
         st.caption("AURA usa tus credenciales solo durante esta importación. La contraseña no se guarda en Neon ni en la sesión.")
-        with st.expander("Importar cursos, horarios y notas desde alumnos.uni.edu.pe", expanded=False):
+        st.info("Flujo actualizado: cursos y horarios desde Curso matriculado → Imprimir boleta; notas actuales desde Curso matriculado → Imprimir notas; historial desde Fichas académicas → Avance curricular.")
+        with st.expander("Importar boleta, notas actuales y avance curricular desde alumnos.uni.edu.pe", expanded=False):
             with st.form("form_intralu_import"):
                 col_intr1, col_intr2, col_intr3 = st.columns([1.1, 1.1, .8])
                 with col_intr1:
@@ -931,15 +932,15 @@ elif menu == "Perfil Académico":
                     intralu_reemplazar_horarios = st.checkbox("Reemplazar horarios anteriores", value=True, key="intralu_reemplazar_horarios")
                 with col_chk2:
                     intralu_reemplazar_notas = st.checkbox("Reemplazar notas del ciclo", value=True, key="intralu_reemplazar_notas")
-                st.info("Si INTRALU solicita CAPTCHA, verificación adicional o cambia su estructura, usa la importación por boleta PDF como respaldo.")
-                importar_intralu = st.form_submit_button("🌐 Importar cursos, horarios y notas")
+                st.info("El proceso puede demorar porque AURA abre INTRALU, entra a Curso matriculado, descarga/lee la boleta, lee las notas actuales y luego revisa Avance curricular. Si aparece CAPTCHA o verificación adicional, usa la importación por PDF como respaldo.")
+                importar_intralu = st.form_submit_button("🌐 Importar boleta, notas y avance curricular")
 
             if importar_intralu:
                 if not intralu_codigo.strip() or not intralu_password:
                     st.error("Ingresa tu código UNI y contraseña.")
                 else:
                     try:
-                        with st.spinner("Conectando con INTRALU e importando información académica..."):
+                        with st.spinner("Conectando con INTRALU, leyendo boleta, notas actuales y avance curricular..."):
                             datos_intralu = importar_cursos_horarios_notas_intralu(
                                 intralu_codigo.strip(),
                                 intralu_password,
@@ -957,6 +958,9 @@ elif menu == "Perfil Académico":
                         )
                         if exito:
                             st.success(msg)
+                            documentos = datos_intralu.get("documentos", {}) or {}
+                            if documentos:
+                                st.caption("Documentos detectados: " + ", ".join([f"{k}: {v}" for k, v in documentos.items()]))
                             if datos_intralu.get("advertencias"):
                                 for adv in datos_intralu.get("advertencias", []):
                                     st.warning(adv)

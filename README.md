@@ -1,65 +1,39 @@
-# AURA WEB - INTRALU, Notas y Calendario
+# AURA WEB - INTRALU actualizado
 
-Versión actualizada con:
+Esta versión actualiza la importación desde INTRALU usando el flujo correcto:
 
-- Importación por boleta PDF.
-- Importación desde INTRALU usando credenciales temporales.
-- Extracción de cursos, horarios y notas por curso.
-- Tabla `notas_curso` en Neon.
-- Dashboard con resumen de notas importadas.
-- Planificador semanal y mensual con calendario visual.
-- Interfaz con paleta pastel y botones redondeados.
+1. **Cursos y horarios**: `Curso matriculado -> Imprimir boleta`.
+2. **Notas actuales del ciclo**: `Curso matriculado -> Imprimir notas`.
+3. **Historial completo del alumno**: `Fichas académicas -> Avance curricular`.
 
-## Seguridad de credenciales INTRALU
-
-AURA no guarda la contraseña del estudiante en Neon ni en variables persistentes. La contraseña solo se usa durante la importación y luego se descarta.
-
-Si INTRALU solicita CAPTCHA, verificación adicional o cambia su estructura, el scraper puede fallar. En ese caso, usa la importación por boleta PDF como respaldo.
-
-## Archivos principales
+## Archivos principales actualizados
 
 - `app.py`
 - `database.py`
 - `intralu_scraper.py`
-- `ai_engine.py`
-- `planner.py`
-- `report_generator.py`
-- `boleta_parser.py`
-- `config.py`
 - `requirements.txt`
+- `packages.txt`
 
-## Secrets de Streamlit
+## Seguridad
 
-```toml
-NEON_DATABASE_URL = "postgresql://usuario:password@host.neon.tech/neondb?sslmode=require"
-GEMINI_API_KEY = "TU_API_KEY"
-GEMINI_MODEL = "gemini-2.5-flash-lite"
-```
+AURA no guarda la contraseña de INTRALU. La usa solo temporalmente para iniciar sesión, capturar la boleta/notas/avance curricular y cerrar la sesión del navegador automatizado.
 
-## Dependencias nuevas
+## Dependencias
 
-Se agregaron:
-
-```txt
-beautifulsoup4
-lxml
-playwright
-```
-
-Para usarlo localmente, después de instalar requirements ejecuta:
+El scraper usa Playwright. En local ejecuta:
 
 ```bash
+python -m pip install -r requirements.txt
 python -m playwright install chromium
+streamlit run app.py
 ```
 
-En Streamlit Cloud, la app intentará instalar Chromium si no existe. Si el servidor no permite instalarlo, la app seguirá funcionando y podrás importar por PDF.
+En Streamlit Cloud, sube también `packages.txt`. Si Playwright no puede ejecutar Chromium o INTRALU solicita CAPTCHA/verificación, usa la importación por PDF como respaldo.
 
-## Despliegue
+## Secrets requeridos
 
-Sube los archivos al repositorio GitHub, haz commit y reinicia la app en Streamlit Cloud:
-
-```text
-Manage app → Reboot
+```toml
+NEON_DATABASE_URL = "postgresql://..."
+GEMINI_API_KEY = "..."
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 ```
-
-La app creará automáticamente la tabla `notas_curso` al iniciar.

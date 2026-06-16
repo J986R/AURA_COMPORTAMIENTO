@@ -1140,7 +1140,7 @@ def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reem
         guardar_nota_curso(
             estudiante_id=estudiante_id,
             curso_id=curso_id,
-            ciclo=ciclo,
+            ciclo=n.get("ciclo") or ciclo,
             codigo_curso=codigo,
             nombre_curso=n.get("nombre_curso") or codigo,
             tipo_evaluacion=n.get("tipo_evaluacion") or "Nota",
