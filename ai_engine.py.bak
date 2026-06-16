@@ -95,7 +95,7 @@ def _normalizar_indice(valor, defecto=3.0):
         return defecto
 
 
-def _normalizar_resultado_diagnostico(datos: dict, respuestas: dict, historial_riesgo: dict | None = None):
+def _normalizar_resultado_diagnostico(datos: dict, respuestas: dict):
     campos = [
         "puntaje_riesgo",
         "nivel_riesgo",
@@ -123,28 +123,11 @@ def _normalizar_resultado_diagnostico(datos: dict, respuestas: dict, historial_r
     datos["diagnostico_general"] = str(datos["diagnostico_general"])
     datos["recomendacion_estudiante"] = str(datos["recomendacion_estudiante"])
     datos["recomendacion_tutoria"] = str(datos["recomendacion_tutoria"])
-
-    # Ajuste determinístico por historial académico importado desde Avance curricular.
-    # Regla: si el alumno llevó cursos 3 o más veces, eso evidencia antecedente de riesgo.
-    if historial_riesgo:
-        try:
-            ajuste = int(historial_riesgo.get("ajuste_riesgo", 0) or 0)
-        except Exception:
-            ajuste = 0
-        if ajuste > 0:
-            puntaje_base = int(datos["puntaje_riesgo"])
-            datos["puntaje_riesgo"] = max(0, min(100, puntaje_base + ajuste))
-            datos["nivel_riesgo"] = nivel_por_puntaje(datos["puntaje_riesgo"])
-            resumen_hist = historial_riesgo.get("resumen") or "Se detectaron antecedentes académicos en el avance curricular."
-            datos["diagnostico_general"] += f" Además, el avance curricular agrega un antecedente relevante: {resumen_hist}"
-            datos["recomendacion_tutoria"] += " Se recomienda revisar el historial de cursos repetidos y reforzar el seguimiento preventivo."
-        datos["historial_riesgo"] = historial_riesgo
-
     datos["exito"] = True
     return datos
 
 
-def generar_diagnostico_ia(nombre_estudiante: str, horas_estudio_dia: float, promedio_ponderado: float, respuestas: dict, historial_riesgo: dict | None = None):
+def generar_diagnostico_ia(nombre_estudiante: str, horas_estudio_dia: float, promedio_ponderado: float, respuestas: dict):
     respuestas_texto = "\n".join(
         [f"Pregunta {i}: {PREGUNTAS_TEXTO[i]} Respuesta: {respuestas[i]}/5" for i in range(1, 21)]
     )
@@ -161,7 +144,6 @@ Datos del estudiante:
 - Nombre: {nombre_estudiante}
 - Horas de estudio por día: {horas_estudio_dia}
 - Promedio ponderado: {promedio_ponderado}
-- Indicador histórico desde avance curricular: {json.dumps(historial_riesgo or {}, ensure_ascii=False)}
 
 Escala:
 1 = Nunca
@@ -201,7 +183,6 @@ Criterios obligatorios de coherencia:
 - nivel_riesgo debe seguir estos rangos: 0-39 Bajo, 40-69 Medio, 70-100 Alto.
 - Si la pregunta 20 es 4 o 5, alerta_emocional debe ser 1.
 - Si hay promedio bajo, poco estudio, alta procrastinación y señales de malestar, el riesgo debe subir.
-- Si el avance curricular muestra cursos llevados 3 o más veces, debes considerarlo como antecedente de riesgo académico.
 - Si hay buen promedio, buena motivación y pocas señales de estrés/procrastinación, el riesgo debe bajar.
 - Sé prudente: orientación académica, no diagnóstico clínico.
 """
@@ -210,7 +191,7 @@ Criterios obligatorios de coherencia:
         datos = extraer_json(contenido)
         if datos is None:
             return {"exito": False, "error": "La IA no devolvió un JSON válido.", "respuesta_original": contenido}
-        return _normalizar_resultado_diagnostico(datos, respuestas, historial_riesgo)
+        return _normalizar_resultado_diagnostico(datos, respuestas)
     except Exception as error:
         return {"exito": False, "error": str(error), "respuesta_original": ""}
 

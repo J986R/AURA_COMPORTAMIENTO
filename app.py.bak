@@ -37,7 +37,6 @@ from database import (
     listar_estudiantes,
     listar_horarios_clase,
     listar_notas_por_estudiante,
-    listar_avance_curricular,
     listar_tareas_para_planificador,
     listar_tareas_por_estudiante,
     listar_usuarios,
@@ -45,7 +44,6 @@ from database import (
     obtener_cursos_mayor_dificultad,
     obtener_estudiante_por_id,
     obtener_resumen_notas,
-    obtener_indicador_riesgo_historico,
     obtener_panel_tutoria,
     obtener_tarea_por_id,
     obtener_tabla_completa,
@@ -966,20 +964,16 @@ elif menu == "Perfil Académico":
                             if datos_intralu.get("advertencias"):
                                 for adv in datos_intralu.get("advertencias", []):
                                     st.warning(adv)
-                            col_prev1, col_prev2 = st.columns(2)
+                            col_prev1, col_prev2, col_prev3 = st.columns(3)
                             with col_prev1:
                                 st.caption("Cursos detectados")
                                 st.dataframe(pd.DataFrame(datos_intralu.get("cursos", [])), use_container_width=True)
                             with col_prev2:
                                 st.caption("Horarios detectados")
                                 st.dataframe(pd.DataFrame(datos_intralu.get("horarios", [])), use_container_width=True)
-                            col_prev3, col_prev4 = st.columns(2)
                             with col_prev3:
                                 st.caption("Notas detectadas")
                                 st.dataframe(pd.DataFrame(datos_intralu.get("notas", [])), use_container_width=True)
-                            with col_prev4:
-                                st.caption("Avance curricular detectado")
-                                st.dataframe(pd.DataFrame(datos_intralu.get("avance", [])), use_container_width=True)
                             st.rerun()
                         else:
                             st.error(msg)
@@ -989,15 +983,6 @@ elif menu == "Perfil Académico":
                         st.code(str(error))
 
         st.divider()
-        avance_actual = listar_avance_curricular(estudiante_id)
-        if avance_actual:
-            st.subheader("📈 Avance curricular importado")
-            df_avance = pd.DataFrame(avance_actual, columns=["ID", "Ciclo", "Código", "Curso", "Créditos", "Veces", "Nota", "Estado", "Origen", "Fecha"])
-            st.dataframe(df_avance, use_container_width=True)
-            indicador = obtener_indicador_riesgo_historico(estudiante_id)
-            if indicador.get("ajuste_riesgo", 0) > 0:
-                st.warning(f"Este historial se usará como indicador adicional de riesgo: {indicador.get('resumen')}")
-
         st.subheader("📚 Cursos")
         cursos = listar_cursos_por_estudiante(estudiante_id)
         col_add, col_hint = st.columns([1, 3])
@@ -1169,15 +1154,6 @@ elif menu == "Diagnóstico Académico":
         detalle = obtener_ultimo_diagnostico_detallado(estudiante_id)
         inicializar_diagnostico_state(estudiante_id, detalle)
         mostrar_diagnostico_guardado(detalle)
-        historial_riesgo = obtener_indicador_riesgo_historico(estudiante_id)
-        if historial_riesgo.get("total_registros", 0):
-            ajuste = historial_riesgo.get("ajuste_riesgo", 0)
-            if ajuste > 0:
-                st.warning(f"Indicador histórico activo: {historial_riesgo.get('resumen')} Ajuste sugerido al riesgo: +{ajuste} puntos.")
-            else:
-                st.info(f"Historial académico importado: {historial_riesgo.get('resumen')}")
-        else:
-            st.caption("Aún no hay avance curricular importado. Si lo importas desde INTRALU, AURA lo usará como indicador adicional de riesgo.")
         st.warning("Este diagnóstico es una orientación académica y de bienestar, no un diagnóstico clínico.")
         st.info("Escala: 1 = Nunca | 2 = Casi nunca | 3 = A veces | 4 = Casi siempre | 5 = Siempre")
         pref = f"diag_{estudiante_id}_"
@@ -1199,7 +1175,7 @@ elif menu == "Diagnóstico Académico":
             if st.form_submit_button("🤖 Generar diagnóstico con IA y guardar"):
                 respuestas = {i: escala_a_num(st.session_state[f"{pref}p{i}"]) for i in range(1, 21)}
                 with st.spinner("AURA está generando el diagnóstico con IA..."):
-                    resultado = generar_diagnostico_ia(nombre_estudiante, st.session_state[f"{pref}horas"], st.session_state[f"{pref}promedio"], respuestas, historial_riesgo)
+                    resultado = generar_diagnostico_ia(nombre_estudiante, st.session_state[f"{pref}horas"], st.session_state[f"{pref}promedio"], respuestas)
                 if not resultado.get("exito"):
                     st.error("No se pudo generar el diagnóstico con IA.")
                     st.code(resultado.get("error", "Error desconocido"))
@@ -1517,7 +1493,7 @@ elif menu == "Reportes":
 
 elif menu == "Exportar datos":
     st.header("📦 Exportar datos")
-    tabla = st.selectbox("Tabla", ["estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "horarios_clase", "notas_curso", "avance_curricular", "planes_semanales", "coach_recomendaciones"])
+    tabla = st.selectbox("Tabla", ["estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "horarios_clase", "notas_curso", "planes_semanales", "coach_recomendaciones"])
     columnas, filas = obtener_tabla_completa(tabla)
     df = pd.DataFrame(filas, columns=columnas)
     st.dataframe(df, use_container_width=True)

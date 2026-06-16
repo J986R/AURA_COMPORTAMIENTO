@@ -211,23 +211,6 @@ def crear_tablas():
                 )
             """)
 
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS avance_curricular (
-                    id SERIAL PRIMARY KEY,
-                    estudiante_id INTEGER NOT NULL REFERENCES estudiantes(id) ON DELETE CASCADE,
-                    curso_id INTEGER REFERENCES cursos(id) ON DELETE SET NULL,
-                    ciclo TEXT,
-                    codigo_curso TEXT,
-                    nombre_curso TEXT,
-                    creditos INTEGER,
-                    veces INTEGER DEFAULT 1,
-                    nota REAL,
-                    estado TEXT,
-                    origen TEXT,
-                    fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-
             # Migraciones para bases creadas con versiones anteriores.
             migraciones = [
                 "ALTER TABLE diagnosticos ADD COLUMN IF NOT EXISTS horas_estudio_dia REAL",
@@ -247,11 +230,6 @@ def crear_tablas():
                 "ALTER TABLE notas_curso ADD COLUMN IF NOT EXISTS peso REAL",
                 "ALTER TABLE notas_curso ADD COLUMN IF NOT EXISTS observacion TEXT",
                 "ALTER TABLE notas_curso ADD COLUMN IF NOT EXISTS origen TEXT",
-                "ALTER TABLE avance_curricular ADD COLUMN IF NOT EXISTS creditos INTEGER",
-                "ALTER TABLE avance_curricular ADD COLUMN IF NOT EXISTS veces INTEGER DEFAULT 1",
-                "ALTER TABLE avance_curricular ADD COLUMN IF NOT EXISTS nota REAL",
-                "ALTER TABLE avance_curricular ADD COLUMN IF NOT EXISTS estado TEXT",
-                "ALTER TABLE avance_curricular ADD COLUMN IF NOT EXISTS origen TEXT",
             ]
             for sql in migraciones:
                 cursor.execute(sql)
@@ -1109,128 +1087,6 @@ def obtener_resumen_notas(estudiante_id: int):
     return filas
 
 
-
-
-def limpiar_avance_curricular(estudiante_id: int):
-    _execute("DELETE FROM avance_curricular WHERE estudiante_id = %s", (estudiante_id,))
-    return True
-
-
-def guardar_avance_curricular(
-    estudiante_id: int,
-    curso_id: Optional[int],
-    ciclo: str,
-    codigo_curso: str,
-    nombre_curso: str,
-    creditos: int = 0,
-    veces: int = 1,
-    nota: Optional[float] = None,
-    estado: str = "",
-    origen: str = "INTRALU avance curricular",
-):
-    _execute(
-        """
-        INSERT INTO avance_curricular (
-            estudiante_id, curso_id, ciclo, codigo_curso, nombre_curso,
-            creditos, veces, nota, estado, origen, fecha_registro
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            estudiante_id,
-            curso_id,
-            ciclo,
-            codigo_curso,
-            nombre_curso,
-            int(creditos or 0),
-            int(veces or 1),
-            nota,
-            estado,
-            origen,
-            datetime.now(),
-        ),
-    )
-    return True
-
-
-def listar_avance_curricular(estudiante_id: int):
-    return _fetchall(
-        """
-        SELECT id, ciclo, codigo_curso, nombre_curso, creditos, veces, nota, estado, origen, fecha_registro
-        FROM avance_curricular
-        WHERE estudiante_id = %s
-        ORDER BY ciclo DESC NULLS LAST, codigo_curso ASC, id DESC
-        """,
-        (estudiante_id,),
-    )
-
-
-def obtener_indicador_riesgo_historico(estudiante_id: int):
-    """Resume antecedentes académicos importados desde Avance curricular.
-
-    Regla central solicitada: si un alumno llevó cursos 3 o más veces, ya tuvo riesgo antes;
-    por tanto, este historial sube el riesgo del diagnóstico actual.
-    """
-    fila = _fetchone(
-        """
-        SELECT
-            COUNT(*) AS total_registros,
-            COALESCE(MAX(veces), 0) AS max_veces,
-            COALESCE(SUM(CASE WHEN veces >= 3 THEN 1 ELSE 0 END), 0) AS cursos_3_mas,
-            COALESCE(SUM(CASE WHEN veces > 3 THEN 1 ELSE 0 END), 0) AS cursos_mas_3,
-            COALESCE(SUM(CASE WHEN nota IS NOT NULL AND nota < 11 THEN 1 ELSE 0 END), 0) AS notas_desaprobadas,
-            COALESCE(AVG(CASE WHEN nota IS NOT NULL THEN nota END), 0) AS promedio_historico
-        FROM avance_curricular
-        WHERE estudiante_id = %s
-        """,
-        (estudiante_id,),
-    )
-    if not fila:
-        return {
-            "total_registros": 0,
-            "max_veces": 0,
-            "cursos_3_mas": 0,
-            "cursos_mas_3": 0,
-            "notas_desaprobadas": 0,
-            "promedio_historico": 0,
-            "ajuste_riesgo": 0,
-            "resumen": "Sin avance curricular importado.",
-        }
-    total, max_veces, cursos_3_mas, cursos_mas_3, notas_desaprobadas, promedio_hist = fila
-    total = int(total or 0)
-    max_veces = int(max_veces or 0)
-    cursos_3_mas = int(cursos_3_mas or 0)
-    cursos_mas_3 = int(cursos_mas_3 or 0)
-    notas_desaprobadas = int(notas_desaprobadas or 0)
-    promedio_hist = float(promedio_hist or 0)
-
-    ajuste = 0
-    if cursos_mas_3 > 0:
-        ajuste += min(25, 15 + (cursos_mas_3 - 1) * 5)
-    elif cursos_3_mas > 0:
-        ajuste += min(18, 10 + (cursos_3_mas - 1) * 4)
-    if max_veces >= 4:
-        ajuste += 5
-    ajuste += min(15, notas_desaprobadas * 2)
-    if 0 < promedio_hist < 11:
-        ajuste += 5
-    ajuste = min(35, ajuste)
-
-    resumen = (
-        f"Avance curricular: {total} registros; máximo de veces en un curso: {max_veces}; "
-        f"cursos llevados 3 o más veces: {cursos_3_mas}; desaprobaciones detectadas: {notas_desaprobadas}."
-    )
-    return {
-        "total_registros": total,
-        "max_veces": max_veces,
-        "cursos_3_mas": cursos_3_mas,
-        "cursos_mas_3": cursos_mas_3,
-        "notas_desaprobadas": notas_desaprobadas,
-        "promedio_historico": round(promedio_hist, 2) if promedio_hist else 0,
-        "ajuste_riesgo": ajuste,
-        "resumen": resumen,
-    }
-
 def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reemplazar_horarios: bool = True, reemplazar_notas: bool = True):
     """Guarda en Neon el resultado devuelto por intralu_scraper.
 
@@ -1239,13 +1095,11 @@ def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reem
     cursos = datos.get("cursos", []) or []
     horarios = datos.get("horarios", []) or []
     notas = datos.get("notas", []) or []
-    avance = datos.get("avance", []) or []
 
     if reemplazar_horarios:
         limpiar_horarios_clase(estudiante_id)
     if reemplazar_notas:
         limpiar_notas_curso(estudiante_id, ciclo)
-        limpiar_avance_curricular(estudiante_id)
 
     mapa_cursos = {}
     for curso in cursos:
@@ -1297,29 +1151,10 @@ def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reem
             origen=n.get("origen") or "INTRALU",
         )
 
-    for a in avance:
-        codigo = a.get("codigo_curso") or a.get("codigo") or ""
-        curso_id = mapa_cursos.get(codigo)
-        if not curso_id:
-            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, a.get("nombre_curso") or codigo, int(a.get("creditos") or 0), "")
-            mapa_cursos[codigo] = curso_id
-        guardar_avance_curricular(
-            estudiante_id=estudiante_id,
-            curso_id=curso_id,
-            ciclo=a.get("ciclo") or "",
-            codigo_curso=codigo,
-            nombre_curso=a.get("nombre_curso") or codigo,
-            creditos=int(a.get("creditos") or 0),
-            veces=int(a.get("veces") or 1),
-            nota=a.get("nota"),
-            estado=a.get("estado") or "",
-            origen=a.get("origen") or "INTRALU avance curricular",
-        )
-
-    return True, f"Se importaron {len(cursos)} cursos, {len(horarios)} horarios, {len(notas)} notas y {len(avance)} registros de avance curricular desde INTRALU."
+    return True, f"Se importaron {len(cursos)} cursos, {len(horarios)} horarios y {len(notas)} notas desde INTRALU."
 
 def obtener_tabla_completa(tabla: str):
-    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones", "horarios_clase", "notas_curso", "avance_curricular"}
+    permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones", "horarios_clase", "notas_curso"}
     if tabla not in permitidas:
         raise ValueError("Tabla no permitida.")
     with conectar() as conn:

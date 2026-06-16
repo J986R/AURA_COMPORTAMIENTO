@@ -1,51 +1,44 @@
-# AURA WEB - INTRALU corregido
+# AURA WEB - INTRALU corregido con avance curricular y horarios reforzados
 
-Esta versión corrige la importación desde INTRALU usando el flujo real:
+Versión actualizada de AURA con integración INTRALU, calendario, diagnóstico académico y planificador.
 
-1. **Cursos y horarios**: `Curso matriculado -> Imprimir boleta`.
-2. **Notas actuales del ciclo**: `Curso matriculado -> Imprimir notas`.
-3. **Historial completo del alumno**: `Fichas académicas -> Avance curricular`.
+## Cambios de esta versión
 
-## Correcciones de esta versión
+1. **Boleta / horarios corregidos**
+   - Se reforzó el parser de boleta para detectar mejor:
+     - nombre del docente,
+     - día de clase,
+     - hora de inicio,
+     - hora de fin,
+     - aula.
+   - Si el PDF/HTML junta filas o columnas, AURA aplica un parser global adicional.
 
-- La pantalla/documento de notas ya no se carga como si fueran cursos.
-- AURA solo crea cursos y horarios cuando el documento capturado tiene estructura de **boleta de matrícula**.
-- Las notas actuales ya no leen únicamente la columna **Nota**.
-- Ahora se extraen evaluaciones por columna, por ejemplo:
-  - `Práctica 2` -> tipo **Práctica calificada**.
-  - `Monografía 2` -> tipo **Monografía**.
-  - `Parcial` / `EP` -> tipo **Examen parcial**.
-  - `Final` / `EF` -> tipo **Examen final**.
-  - `Nota` / `Promedio` -> tipo **Promedio**.
+2. **Avance curricular como indicador de riesgo**
+   - Se agregó la tabla `avance_curricular`.
+   - El scraper intenta leer el avance curricular desde INTRALU.
+   - Si detecta cursos llevados **3 o más veces**, lo usa como antecedente de riesgo académico.
+   - El diagnóstico IA recibe este indicador y ajusta el puntaje de riesgo.
+
+3. **Notas y actividades**
+   - Se mantiene la lectura de notas actuales.
+   - Práctica 1/2 se clasifica como Práctica calificada.
+   - Monografía 1/2 se clasifica como Monografía.
+   - Parcial y Final se clasifican correctamente.
 
 ## Archivos principales actualizados
 
 - `app.py`
 - `database.py`
 - `intralu_scraper.py`
-- `requirements.txt`
-- `packages.txt`
+- `ai_engine.py`
+- `boleta_parser.py`
+
+## Despliegue
+
+Sube o reemplaza todo el contenido del ZIP en GitHub y luego reinicia la app en Streamlit Cloud.
+
+La app creará automáticamente la nueva tabla `avance_curricular` al iniciar.
 
 ## Seguridad
 
-AURA no guarda la contraseña de INTRALU. La usa solo temporalmente para iniciar sesión, capturar la boleta/notas/avance curricular y cerrar la sesión del navegador automatizado.
-
-## Dependencias
-
-El scraper usa Playwright. En local ejecuta:
-
-```bash
-python -m pip install -r requirements.txt
-python -m playwright install chromium
-streamlit run app.py
-```
-
-En Streamlit Cloud, sube también `packages.txt`. Si Playwright no puede ejecutar Chromium o INTRALU solicita CAPTCHA/verificación, usa la importación por PDF como respaldo.
-
-## Secrets requeridos
-
-```toml
-NEON_DATABASE_URL = "postgresql://..."
-GEMINI_API_KEY = "..."
-GEMINI_MODEL = "gemini-2.5-flash-lite"
-```
+Las credenciales de INTRALU no se guardan. Solo se usan temporalmente durante la importación.

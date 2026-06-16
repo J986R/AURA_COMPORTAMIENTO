@@ -80,7 +80,6 @@ class IntraluResultado:
     cursos: List[Dict[str, Any]]
     horarios: List[Dict[str, Any]]
     notas: List[Dict[str, Any]]
-    avance: List[Dict[str, Any]]
     advertencias: List[str]
     documentos: Dict[str, str]
 
@@ -90,7 +89,6 @@ class IntraluResultado:
             "cursos": self.cursos,
             "horarios": self.horarios,
             "notas": self.notas,
-            "avance": self.avance,
             "advertencias": self.advertencias,
             "documentos": self.documentos,
         }
@@ -263,137 +261,6 @@ def extraer_estudiante_desde_texto(texto: str) -> Dict[str, Any]:
     return estudiante
 
 
-
-
-def _normalizar_dia(dia: str) -> str:
-    clave = limpiar_texto(dia).upper().replace("Á", "A").replace("É", "E")
-    if clave == "MIERCOLES":
-        return "Miércoles"
-    if clave == "SABADO":
-        return "Sábado"
-    return DIAS_VALIDOS.get(clave, limpiar_texto(dia).title())
-
-
-def _normalizar_tipo_clase(tipo: str) -> str:
-    t = _sin_tildes(limpiar_texto(tipo)) if '_sin_tildes' in globals() else limpiar_texto(tipo).upper()
-    if "PRACT" in t:
-        return "Práctica"
-    if "LAB" in t:
-        return "Laboratorio"
-    if "TEORIA" in t:
-        return "Teoría"
-    return limpiar_texto(tipo).title() or "Clase"
-
-
-def _aula_probable(aula: str) -> str:
-    aula = limpiar_texto(aula)
-    m = re.search(r"\b([A-Z]\d?[-/]?\d{2,4}|[A-Z]{1,3}[-/]?\d{2,4}|AULA\s*\d+)\b", aula, flags=re.I)
-    if m:
-        return limpiar_texto(m.group(1)).upper().replace("/", "-")
-    # Si no hay formato de aula claro, devolver solo la primera palabra para no contaminar con el siguiente registro.
-    return aula.split()[0] if aula else ""
-
-
-def _merge_cursos(base: Dict[str, Dict[str, Any]], nuevos: List[Dict[str, Any]]) -> None:
-    for c in nuevos or []:
-        codigo = c.get("codigo_curso") or c.get("codigo") or ""
-        if not codigo:
-            continue
-        cod, sec = separar_codigo_seccion(codigo)
-        visible = codigo_visible(cod, sec)
-        c = dict(c)
-        c["codigo_curso"] = visible
-        c.setdefault("codigo", cod)
-        c.setdefault("seccion", sec)
-        previo = base.get(visible, {})
-        combinado = {**previo, **{k: v for k, v in c.items() if v not in (None, "", [])}}
-        base[visible] = combinado
-
-
-def _extraer_cursos_y_horarios_texto_global(texto: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Parser reforzado para PDFs de INTRALU cuando PyPDF junta columnas o filas.
-
-    Corrige el caso reportado: la boleta sí se descarga, pero no se detectan docente ni horas
-    porque la fila no llega separada exactamente igual que en el PDF de ejemplo.
-    """
-    cursos: Dict[str, Dict[str, Any]] = {}
-    horarios: List[Dict[str, Any]] = []
-    texto_norm = re.sub(r"\s+", " ", texto or " ").strip()
-
-    # Cursos: 12 GE122-U SISTEMA DE COSTOS- N 3 0
-    patron_cursos = re.compile(
-        r"(?:^|\s)(\d{1,2})\s+([A-Z]{2}\d{3}[-/]?[A-Z])\s+(.+?)\s+([A-Z])\s+(\d+)\s+(\d+)"
-        r"(?=\s+\d{1,2}\s+[A-Z]{2}\d{3}[-/]?[A-Z]\s+|\s+Curso\s+Tipo\s+Docente\s+Dia\s+Hora\s+Aula\b|$)",
-        flags=re.I,
-    )
-    for m in patron_cursos.finditer(texto_norm):
-        cod, sec = separar_codigo_seccion(m.group(2))
-        visible = codigo_visible(cod, sec)
-        nombre = limpiar_texto(m.group(3)).strip("-")
-        cursos[visible] = {
-            "ciclo": limpiar_texto(m.group(1)),
-            "codigo_curso": visible,
-            "codigo": cod,
-            "seccion": sec,
-            "nombre_curso": nombre or visible,
-            "condicion": limpiar_texto(m.group(4)),
-            "creditos": normalizar_entero(m.group(5), 0),
-            "veces": normalizar_entero(m.group(6), 0),
-            "docente": "",
-        }
-
-    # Si encontramos cabecera de horarios, limitar el texto para evitar tomar datos del bloque de cursos.
-    horario_texto = texto_norm
-    mhdr = re.search(r"Curso\s+Tipo\s+Docente\s+Dia\s+Hora\s+Aula", horario_texto, flags=re.I)
-    if mhdr:
-        horario_texto = horario_texto[mhdr.end():]
-
-    tipo_pat = r"TEORIA|TEORÍA|PRACTICA|PRÁCTICA|LABORATORIO|LAB|CLASE"
-    dia_pat = r"LUNES|MARTES|MI[ÉE]RCOLES|JUEVES|VIERNES|S[ÁA]BADO|DOMINGO"
-    patron_horario = re.compile(
-        rf"\b([A-Z]{{2}}\d{{3}}[-/]?[A-Z])\s+({tipo_pat})\s+(.+?)\s+({dia_pat})\s+"
-        rf"(\d{{1,2}}:\d{{2}})\s*(?:a|-|–|—)\s*(\d{{1,2}}:\d{{2}})\s+(.+?)"
-        rf"(?=\s+[A-Z]{{2}}\d{{3}}[-/]?[A-Z]\s+(?:{tipo_pat})\b|\s*\*\*|\s*Recuerde\b|$)",
-        flags=re.I,
-    )
-    for m in patron_horario.finditer(horario_texto):
-        cod, sec = separar_codigo_seccion(m.group(1))
-        visible = codigo_visible(cod, sec)
-        docente = limpiar_texto(m.group(3)).title()
-        aula = _aula_probable(m.group(7))
-        if visible not in cursos:
-            cursos[visible] = {
-                "codigo_curso": visible,
-                "codigo": cod,
-                "seccion": sec,
-                "nombre_curso": visible,
-                "creditos": 0,
-                "docente": docente,
-            }
-        elif docente and not cursos[visible].get("docente"):
-            cursos[visible]["docente"] = docente
-
-        horarios.append({
-            "codigo_curso": visible,
-            "codigo": cod,
-            "seccion": sec,
-            "nombre_curso": cursos.get(visible, {}).get("nombre_curso") or visible,
-            "tipo": _normalizar_tipo_clase(m.group(2)),
-            "docente": docente,
-            "dia": _normalizar_dia(m.group(4)),
-            "inicio": normalizar_hora(m.group(5)),
-            "fin": normalizar_hora(m.group(6)),
-            "aula": aula,
-        })
-
-    # Completar nombre del curso si la tabla de cursos se pudo leer después de horarios.
-    for h in horarios:
-        cod = h.get("codigo_curso")
-        if cod in cursos:
-            h["nombre_curso"] = cursos[cod].get("nombre_curso") or h.get("nombre_curso") or cod
-
-    return list(cursos.values()), horarios
-
 def extraer_cursos_y_horarios(html_o_texto: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
     """Extrae cursos y horarios desde boleta o página general.
 
@@ -485,11 +352,6 @@ def extraer_cursos_y_horarios(html_o_texto: str) -> Tuple[List[Dict[str, Any]], 
         texto = html_o_texto
     lineas = [limpiar_texto(x) for x in texto.splitlines() if limpiar_texto(x)]
 
-    # Parser global adicional: útil cuando el PDF/HTML junta varias filas en una sola línea.
-    cursos_globales, horarios_globales = _extraer_cursos_y_horarios_texto_global(texto)
-    _merge_cursos(cursos, cursos_globales)
-    horarios.extend(horarios_globales)
-
     for linea in lineas:
         # Curso listado: 12 GE122-U SISTEMA DE COSTOS- N 3 0
         m = re.match(r"^(\d{1,2})\s+([A-Z]{2}\d{3}[-/]?[A-Z])\s+(.+?)\s+[A-Z]\s+(\d+)\s+\d+\s*$", linea, flags=re.I)
@@ -517,7 +379,7 @@ def extraer_cursos_y_horarios(html_o_texto: str) -> Tuple[List[Dict[str, Any]], 
         if m:
             cod, sec = separar_codigo_seccion(m.group(1))
             visible = codigo_visible(cod, sec)
-            dia = _normalizar_dia(m.group(4))
+            dia = DIAS_VALIDOS.get(limpiar_texto(m.group(4)).upper(), limpiar_texto(m.group(4)).title())
             docente = limpiar_texto(m.group(3)).title()
             cursos.setdefault(visible, {
                 "codigo_curso": visible,
@@ -532,7 +394,7 @@ def extraer_cursos_y_horarios(html_o_texto: str) -> Tuple[List[Dict[str, Any]], 
                 "codigo": cod,
                 "seccion": sec,
                 "nombre_curso": cursos[visible].get("nombre_curso") or visible,
-                "tipo": _normalizar_tipo_clase(m.group(2)),
+                "tipo": limpiar_texto(m.group(2)).title(),
                 "docente": docente,
                 "dia": dia,
                 "inicio": normalizar_hora(m.group(5)),
@@ -834,145 +696,6 @@ def extraer_notas_documento(documento: Dict[str, Any], ciclo_hint: str, origen: 
     return extraer_notas_desde_texto(texto, ciclo_hint, origen)
 
 
-
-
-def _deduplicar_avance(avance: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    salida: Dict[Tuple[str, str, str, int, Optional[float]], Dict[str, Any]] = {}
-    for a in avance or []:
-        codigo = a.get("codigo_curso") or a.get("codigo") or ""
-        if not codigo:
-            continue
-        cod, sec = separar_codigo_seccion(codigo)
-        visible = codigo_visible(cod, sec)
-        a = dict(a)
-        a["codigo_curso"] = visible
-        try:
-            veces = int(a.get("veces") or 1)
-        except Exception:
-            veces = 1
-        a["veces"] = veces
-        nota = normalizar_decimal(a.get("nota"))
-        a["nota"] = nota
-        key = (str(a.get("ciclo", "")), visible, str(a.get("nombre_curso", "")), veces, nota)
-        salida[key] = a
-    return list(salida.values())
-
-
-def extraer_avance_de_tablas_html(html: str, origen: str = "INTRALU avance curricular") -> List[Dict[str, Any]]:
-    """Extrae historial académico del avance curricular, incluyendo número de veces.
-
-    Este indicador sirve luego para riesgo: llevar cursos 3+ veces refleja antecedentes de riesgo.
-    """
-    avance: List[Dict[str, Any]] = []
-    for idx, df in enumerate(_leer_tablas_html(html)):
-        if df.empty:
-            continue
-        df = df.copy()
-        df.columns = [_nombre_columna(c) for c in df.columns]
-        mapping = _columnas_norm(df)
-        col_codigo = _col(mapping, "codigo", "código", "cod", "curso")
-        col_nombre = _col(mapping, "asignatura", "nombre curso", "nombre", "curso")
-        col_ciclo = _col(mapping, "ciclo", "periodo", "período", "semestre")
-        col_veces = _col(mapping, "veces", "vez", "nro", "n°")
-        col_creditos = _col(mapping, "creditos", "créditos")
-        col_nota = _col(mapping, "nota", "promedio", "calificacion", "calificación")
-        col_estado = _col(mapping, "estado", "situacion", "situación", "condicion", "condición")
-        if not col_codigo:
-            continue
-        for _, row in df.iterrows():
-            cod_raw = limpiar_texto(row.get(col_codigo, ""))
-            if not re.search(r"[A-Z]{2}\d{3}", cod_raw, flags=re.I):
-                continue
-            codigo, seccion = separar_codigo_seccion(cod_raw)
-            visible = codigo_visible(codigo, seccion)
-            avance.append({
-                "ciclo": limpiar_texto(row.get(col_ciclo, "")) if col_ciclo else "",
-                "codigo_curso": visible,
-                "codigo": codigo,
-                "seccion": seccion,
-                "nombre_curso": limpiar_texto(row.get(col_nombre, "")) if col_nombre else visible,
-                "creditos": normalizar_entero(row.get(col_creditos, 0), 0) if col_creditos else 0,
-                "veces": normalizar_entero(row.get(col_veces, 1), 1) if col_veces else 1,
-                "nota": normalizar_decimal(row.get(col_nota, None)) if col_nota else None,
-                "estado": limpiar_texto(row.get(col_estado, "")) if col_estado else "",
-                "origen": f"{origen}:tabla_{idx + 1}",
-            })
-    return _deduplicar_avance(avance)
-
-
-def extraer_avance_desde_texto(texto: str, origen: str = "INTRALU avance curricular") -> List[Dict[str, Any]]:
-    avance: List[Dict[str, Any]] = []
-    lineas = [limpiar_texto(x) for x in (texto or "").splitlines() if limpiar_texto(x)]
-    ciclo_actual = ""
-    for linea in lineas:
-        m_ciclo = re.search(r"\b(20\d{2}[- ]?[12]|20\d{3})\b", linea)
-        if m_ciclo:
-            ciclo_actual = m_ciclo.group(1).replace(" ", "")
-        # Formato amplio: CODIGO NOMBRE ... CREDITOS VECES ... NOTA/ESTADO
-        m = re.search(r"\b([A-Z]{2}\d{3})(?:[-/]?([A-Z]))?\b\s+(.+)$", linea, flags=re.I)
-        if not m:
-            continue
-        codigo = m.group(1).upper()
-        seccion = (m.group(2) or "").upper()
-        visible = codigo_visible(codigo, seccion) if seccion else codigo
-        resto = limpiar_texto(m.group(3))
-        nums = [normalizar_decimal(x) for x in re.findall(r"\b\d{1,2}(?:[.,]\d+)?\b", resto)]
-        nums = [x for x in nums if x is not None]
-        # Nombre antes de la primera cifra detectada.
-        nombre = re.split(r"\b\d{1,2}(?:[.,]\d+)?\b", resto)[0].strip(" -:") or visible
-        creditos = 0
-        veces = 1
-        nota = None
-        valid_notas = [x for x in nums if 0 <= x <= 20]
-        if nums:
-            # En avance curricular usualmente aparecen créditos, veces y nota. Tomamos la última nota válida como nota final.
-            nota = valid_notas[-1] if valid_notas else None
-            # Número de veces: priorizar valores cercanos a etiquetas, luego penúltimos enteros pequeños.
-            mv = re.search(r"(?:VECES|VEZ)\s*[:=]?\s*(\d+)", resto, flags=re.I)
-            if mv:
-                veces = normalizar_entero(mv.group(1), 1)
-            else:
-                enteros = [int(x) for x in re.findall(r"\b\d+\b", resto)]
-                candidatos = [x for x in enteros if 1 <= x <= 10]
-                if len(candidatos) >= 2:
-                    veces = candidatos[-2] if nota is not None and candidatos[-1] == int(nota) else candidatos[-1]
-                elif candidatos:
-                    veces = candidatos[-1]
-            mc = re.search(r"(?:CREDITOS|CRÉDITOS|CRED)\s*[:=]?\s*(\d+)", resto, flags=re.I)
-            if mc:
-                creditos = normalizar_entero(mc.group(1), 0)
-        estado = ""
-        if re.search(r"DESAPROB|JAL", resto, flags=re.I):
-            estado = "Desaprobado"
-        elif re.search(r"APROB", resto, flags=re.I):
-            estado = "Aprobado"
-        avance.append({
-            "ciclo": ciclo_actual,
-            "codigo_curso": visible,
-            "codigo": codigo,
-            "seccion": seccion,
-            "nombre_curso": nombre,
-            "creditos": creditos,
-            "veces": int(veces or 1),
-            "nota": nota,
-            "estado": estado,
-            "origen": origen,
-        })
-    return _deduplicar_avance(avance)
-
-
-def extraer_avance_documento(documento: Dict[str, Any]) -> List[Dict[str, Any]]:
-    if not documento:
-        return []
-    if documento.get("tipo") == "html":
-        html = documento.get("html", "")
-        avance = extraer_avance_de_tablas_html(html)
-        if avance:
-            return avance
-        return extraer_avance_desde_texto(html_a_texto(html))
-    texto = normalizar_documento_texto(documento)
-    return extraer_avance_desde_texto(texto)
-
 def _rellenar_login(page, codigo_uni: str, password: str) -> None:
     candidatos_usuario = [
         "input[name='codigo']", "input[name='username']", "input[name='user']", "input[name='usuario']",
@@ -1221,24 +944,7 @@ def _extraer_boleta_documento(documento: Optional[Dict[str, Any]]) -> Tuple[List
                 "codigo": datos.get("codigo_alumno", ""),
                 "carrera": datos.get("especialidad", ""),
             }
-            cursos_pdf = datos.get("cursos", []) or []
-            horarios_pdf = datos.get("horarios", []) or []
-            # Si el parser especializado no detectó horarios/docentes, hacer fallback reforzado.
-            if cursos_pdf and horarios_pdf:
-                return cursos_pdf, horarios_pdf, estudiante, []
-            texto_fallback = datos.get("texto", "") or normalizar_documento_texto(documento)
-            cursos_txt, horarios_txt, adv_txt = extraer_cursos_y_horarios(texto_fallback)
-            if cursos_txt or horarios_txt:
-                # Mantener los datos del parser PDF si eran mejores, pero completar horarios con parser global.
-                mapa = {c.get("codigo_curso") or c.get("codigo"): c for c in cursos_pdf}
-                for c in cursos_txt:
-                    codigo = c.get("codigo_curso") or c.get("codigo")
-                    if codigo not in mapa:
-                        mapa[codigo] = c
-                    else:
-                        mapa[codigo] = {**mapa[codigo], **{k: v for k, v in c.items() if v not in (None, "", [])}}
-                return list(mapa.values()), horarios_pdf or horarios_txt, estudiante, adv_txt
-            return cursos_pdf, horarios_pdf, estudiante, ["Se leyó la boleta, pero no se detectaron horarios; revisa si el formato cambió."]
+            return datos.get("cursos", []) or [], datos.get("horarios", []) or [], estudiante, []
     except Exception:
         # Si falla el parser especializado, usamos texto genérico.
         pass
@@ -1334,7 +1040,6 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
     cursos: List[Dict[str, Any]] = []
     horarios: List[Dict[str, Any]] = []
     notas: List[Dict[str, Any]] = []
-    avance: List[Dict[str, Any]] = []
     estudiante: Dict[str, Any] = {"codigo": limpiar_texto(codigo_uni).upper()}
 
     try:
@@ -1420,21 +1125,17 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
             doc_avance = _capturar_avance_curricular(page, timeout_ms)
             if doc_avance:
                 documentos["avance_curricular"] = doc_avance.get("nombre", "avance_curricular")
-                avance.extend(extraer_avance_documento(doc_avance))
                 notas_hist = extraer_notas_documento(doc_avance, ciclo, "INTRALU avance curricular")
                 notas.extend(notas_hist)
             else:
                 advertencias.append("No se encontró 'Fichas académicas -> Avance curricular' o no se pudo capturar el documento.")
 
             notas = _deduplicar_notas(notas)
-            avance = _deduplicar_avance(avance)
 
             if not cursos:
                 advertencias.append("No se importaron cursos. Revisa si INTRALU cambió el botón 'Imprimir boleta'.")
             if not notas:
                 advertencias.append("No se importaron notas. Revisa si INTRALU cambió 'Imprimir notas' o 'Avance curricular'.")
-            if not avance:
-                advertencias.append("No se detectó historial de avance curricular con número de veces; el diagnóstico usará los demás indicadores disponibles.")
 
         finally:
             try:
@@ -1448,7 +1149,6 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
         cursos=cursos,
         horarios=horarios,
         notas=notas,
-        avance=avance,
         advertencias=advertencias,
         documentos=documentos,
     ).to_dict()

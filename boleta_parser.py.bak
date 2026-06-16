@@ -101,38 +101,6 @@ def parsear_boleta_matricula(file) -> Dict[str, object]:
                 "aula": limpiar_nombre(aula),
             })
 
-    # Parser global adicional: útil si PyPDF une varias filas y no se detecta docente/hora.
-    if not horarios:
-        texto_norm = re.sub(r"\s+", " ", texto or "").strip()
-        mhdr = re.search(r"Curso\s+Tipo\s+Docente\s+Dia\s+Hora\s+Aula", texto_norm, flags=re.I)
-        horario_texto = texto_norm[mhdr.end():] if mhdr else texto_norm
-        tipo_pat = r"TEORIA|TEORÍA|PRACTICA|PRÁCTICA|LABORATORIO|LAB|CLASE"
-        dia_pat = r"LUNES|MARTES|MI[ÉE]RCOLES|JUEVES|VIERNES|S[ÁA]BADO|DOMINGO"
-        patron_global = re.compile(
-            rf"([A-Z]{{2}}\d{{3}}[-/][A-Z])\s+({tipo_pat})\s+(.+?)\s+({dia_pat})\s+"
-            rf"(\d{{1,2}}:\d{{2}})\s*(?:a|-|–|—)\s*(\d{{1,2}}:\d{{2}})\s+(.+?)"
-            rf"(?=\s+[A-Z]{{2}}\d{{3}}[-/][A-Z]\s+(?:{tipo_pat})|\s*\*\*|\s*Recuerde|$)",
-            flags=re.I,
-        )
-        for mh in patron_global.finditer(horario_texto):
-            codigo, tipo, docente, dia, inicio, fin, aula = mh.groups()
-            codigo = codigo.replace("/", "-").upper()
-            dia_key = dia.upper().replace("É", "E").replace("Á", "A")
-            dia_norm = DIAS_MAP.get(dia_key, DIAS_MAP.get(dia.upper(), dia.title()))
-            tipo_norm = tipo.upper().replace("Á", "A").replace("Í", "I")
-            aula_limpia = limpiar_nombre(aula).split()[0] if aula else ""
-            nombre_curso = cursos.get(codigo, {}).get("nombre_curso", codigo)
-            horarios.append({
-                "codigo_curso": codigo,
-                "nombre_curso": nombre_curso,
-                "tipo": "Práctica" if "PRACT" in tipo_norm else ("Laboratorio" if "LAB" in tipo_norm else "Teoría"),
-                "docente": limpiar_nombre(docente),
-                "dia": dia_norm,
-                "inicio": inicio.zfill(5),
-                "fin": fin.zfill(5),
-                "aula": aula_limpia,
-            })
-
     # Completar docente principal de cursos con el primer horario encontrado.
     for h in horarios:
         if h["codigo_curso"] in cursos and not cursos[h["codigo_curso"]].get("docente"):
