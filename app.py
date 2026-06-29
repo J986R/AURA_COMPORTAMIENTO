@@ -10,7 +10,7 @@ import streamlit.components.v1 as components
 
 from ai_engine import generar_diagnostico_ia, generar_plan_calendario_ia, generar_recomendacion_ia, nivel_por_puntaje
 from boleta_parser import parsear_boleta_matricula
-from intralu_scraper import importar_cursos_horarios_notas_intralu
+from intralu_scraper import importar_cursos_horarios_avance_intralu
 from database import (
     actualizar_curso,
     actualizar_estado_tarea,
@@ -32,11 +32,9 @@ from database import (
     importar_boleta_matricula,
     importar_intralu_resultado,
     limpiar_horarios_clase,
-    limpiar_notas_curso,
     listar_cursos_por_estudiante,
     listar_estudiantes,
     listar_horarios_clase,
-    listar_notas_por_estudiante,
     listar_avance_curricular,
     listar_tareas_para_planificador,
     listar_tareas_por_estudiante,
@@ -44,7 +42,6 @@ from database import (
     obtener_curso_por_id,
     obtener_cursos_mayor_dificultad,
     obtener_estudiante_por_id,
-    obtener_resumen_notas,
     obtener_indicador_riesgo_historico,
     obtener_panel_tutoria,
     obtener_tarea_por_id,
@@ -215,6 +212,20 @@ def aplicar_estilos():
         .aura-month-event.practica{background:#FDE68A!important;}
         .aura-month-event.tarea{background:#A7F3D0!important;}
         .aura-player{position:fixed;right:22px;bottom:22px;z-index:9999;background:rgba(255,255,255,.90);border:1px solid rgba(148,163,184,.18);border-radius:22px;padding:10px 12px;box-shadow:0 12px 28px rgba(15,23,42,.16);backdrop-filter:blur(10px);}
+        .aura-login-wrap{max-width:430px;margin:22px auto 0 auto;}
+        .aura-login-card{background:rgba(255,255,255,.94);border:1px solid rgba(148,163,184,.18);border-radius:24px;padding:22px 24px;box-shadow:0 20px 50px rgba(96,165,250,.16);margin-bottom:14px;}
+        .aura-login-title{font-size:1.35rem;font-weight:950;color:#24324B;letter-spacing:-.03em;margin-bottom:6px;}
+        .aura-login-desc{font-size:.94rem;color:#64748B;line-height:1.45;}
+        .aura-login-action{float:right;font-size:.88rem;color:#2563EB;font-weight:900;text-decoration:underline;text-underline-offset:4px;}
+        .aura-admin-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:12px 0 20px 0;}
+        .aura-admin-card{background:rgba(255,255,255,.92);border:1px solid rgba(148,163,184,.18);border-radius:24px;padding:18px;box-shadow:0 12px 28px rgba(96,165,250,.10);}
+        .aura-admin-card h3{font-size:16px;margin:0 0 6px 0;color:#24324B;}
+        .aura-admin-card p{font-size:13px;color:#64748B;margin:0;line-height:1.42;}
+        .aura-admin-number{font-size:30px;font-weight:950;color:#24324B;margin-top:8px;}
+        .aura-soft-table{background:rgba(255,255,255,.86);border-radius:22px;border:1px solid rgba(148,163,184,.16);padding:12px;}
+        .aura-section-title{display:flex;align-items:center;gap:10px;font-size:1.25rem;font-weight:950;color:#24324B;margin:6px 0 12px 0;}
+        @media(max-width:900px){.aura-admin-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.aura-login-wrap{max-width:100%;}}
+
         @media(max-width:900px){.aura-dashboard-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.aura-cal-head,.aura-cal-body{grid-template-columns:58px repeat(7,170px);overflow-x:auto;}.aura-calendar{overflow-x:auto;}}
         </style>
         """,
@@ -272,28 +283,39 @@ def mostrar_hero(titulo="AURA", subtitulo="Academic University Recommendation As
 
 
 def mostrar_login():
-    mostrar_logo(250)
-    st.title("AURA")
-    st.subheader("Inicio de sesión")
-    st.info("Usuario inicial: admin | Contraseña inicial: aura123")
-
-    with st.form("form_login"):
-        username = st.text_input("Usuario")
-        password = st.text_input("Contraseña", type="password")
-        boton = st.form_submit_button("🔐 Ingresar")
-        if boton:
-            try:
-                usuario = autenticar_usuario(username, password)
-            except Exception as error:
-                st.error("No se pudo iniciar sesión.")
-                st.code(str(error))
-                return
-            if usuario is None:
-                st.error("Usuario o contraseña incorrectos.")
-            else:
-                st.session_state.usuario_logueado = usuario
-                st.rerun()
-
+    c1, c2, c3 = st.columns([1, 1.15, 1])
+    with c2:
+        mostrar_logo(230)
+        st.markdown(
+            """
+            <div class='aura-login-wrap'>
+              <div class='aura-login-card'>
+                <a class='aura-login-action'>AURA</a>
+                <div class='aura-login-title'>Inicia sesión en tu cuenta</div>
+                <div class='aura-login-desc'>Ingresa tus credenciales para acceder a tu dashboard, calendario, tutoría o panel administrativo.</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.info("Usuario inicial: admin | Contraseña inicial: aura123")
+        with st.form("form_login"):
+            username = st.text_input("Usuario", placeholder="Ej: admin")
+            password = st.text_input("Contraseña", type="password", placeholder="Ingresa tu contraseña")
+            boton = st.form_submit_button("🔐 Login", use_container_width=True)
+            if boton:
+                try:
+                    usuario = autenticar_usuario(username, password)
+                except Exception as error:
+                    st.error("No se pudo iniciar sesión.")
+                    st.code(str(error))
+                    return
+                if usuario is None:
+                    st.error("Usuario o contraseña incorrectos.")
+                else:
+                    st.session_state.usuario_logueado = usuario
+                    st.rerun()
+        st.caption("La tarjeta de credenciales fue adaptada al estilo Card + Input + Button en Streamlit.")
 
 def cerrar_sesion():
     st.session_state.usuario_logueado = None
@@ -749,7 +771,7 @@ if st.sidebar.button("🚪 Cerrar sesión"):
 mostrar_musica()
 
 if rol_actual == "Administrador":
-    opciones_menu = ["Dashboard Estudiante", "Diagnóstico Académico", "Perfil Académico", "Tareas y Planificador", "Coach IA", "Reportes", "Panel de Tutoría", "Gestión de usuarios", "Exportar datos"]
+    opciones_menu = ["Dashboard Estudiante", "Diagnóstico Académico", "Perfil Académico", "Tareas y Planificador", "Coach IA", "Reportes", "Panel Admin", "Panel de Tutoría", "Gestión de usuarios", "Exportar datos"]
     default_index = 0
 elif rol_actual == "Tutor":
     opciones_menu = ["Dashboard Estudiante", "Diagnóstico Académico", "Perfil Académico", "Tareas y Planificador", "Coach IA", "Reportes", "Panel de Tutoría"]
@@ -783,7 +805,6 @@ elif menu == "Dashboard Estudiante":
         detalle = obtener_ultimo_diagnostico_detallado(estudiante_id)
         resumen = obtener_resumen_tareas(estudiante_id)
         cursos_dificultad = obtener_cursos_mayor_dificultad(estudiante_id)
-        resumen_notas = obtener_resumen_notas(estudiante_id)
         horarios = listar_horarios_clase(estudiante_id)
         ultimo_plan = obtener_ultimo_plan_semanal(estudiante_id)
 
@@ -828,25 +849,33 @@ elif menu == "Dashboard Estudiante":
                     st.info("Aún no hay cursos registrados.")
 
             st.divider()
-            st.subheader("Notas importadas desde INTRALU")
-            if resumen_notas:
-                df_notas_dash = pd.DataFrame(resumen_notas, columns=["Código", "Curso", "Promedio", "Nota mínima", "Evaluaciones"])
-                fig_notas = px.bar(
-                    df_notas_dash,
-                    x="Promedio",
+            st.subheader("📚 Historial académico importado")
+            indicador_hist = obtener_indicador_riesgo_historico(estudiante_id)
+            avance_dash = listar_avance_curricular(estudiante_id)
+            h1, h2, h3, h4 = st.columns(4)
+            h1.metric("Registros de avance", indicador_hist.get("total_registros", 0))
+            h2.metric("Máx. veces en curso", indicador_hist.get("max_veces", 0))
+            h3.metric("Cursos 3+ veces", indicador_hist.get("cursos_3_mas", 0))
+            h4.metric("Ajuste riesgo", f"+{indicador_hist.get('ajuste_riesgo', 0)}")
+            if avance_dash:
+                df_avance_dash = pd.DataFrame(avance_dash, columns=["ID", "Ciclo", "Código", "Curso", "Créditos", "Veces", "Nota", "Estado", "Origen", "Fecha"])
+                df_top = df_avance_dash.sort_values("Veces", ascending=False).head(8)
+                fig_avance = px.bar(
+                    df_top,
+                    x="Veces",
                     y="Curso",
                     orientation="h",
-                    text="Promedio",
-                    range_x=[0, 20],
-                    color="Promedio",
-                    color_continuous_scale=["#FCA5A5", "#FDE68A", "#A7F3D0"],
+                    text="Veces",
+                    range_x=[0, max(4, int(df_top["Veces"].max() or 1))],
+                    color="Veces",
+                    color_continuous_scale=["#A7F3D0", "#FDE68A", "#FCA5A5"],
                 )
-                fig_notas.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-                fig_notas.update_layout(height=360, margin=dict(l=8, r=36, t=20, b=8), showlegend=False, plot_bgcolor="rgba(255,255,255,0)", paper_bgcolor="rgba(255,255,255,0)")
-                st.plotly_chart(fig_notas, use_container_width=True)
-                st.dataframe(df_notas_dash, use_container_width=True)
+                fig_avance.update_traces(textposition="outside")
+                fig_avance.update_layout(height=340, margin=dict(l=8, r=36, t=20, b=8), showlegend=False, plot_bgcolor="rgba(255,255,255,0)", paper_bgcolor="rgba(255,255,255,0)")
+                st.plotly_chart(fig_avance, use_container_width=True)
+                st.caption(indicador_hist.get("resumen", ""))
             else:
-                st.info("Aún no hay notas importadas. Puedes importarlas desde INTRALU en Perfil Académico.")
+                st.info("Aún no hay avance curricular importado. Puedes importarlo desde INTRALU en Perfil Académico.")
 
             st.divider()
             if detalle:
@@ -919,8 +948,14 @@ elif menu == "Perfil Académico":
         st.divider()
         st.subheader("🔐 Importar desde INTRALU")
         st.caption("AURA usa tus credenciales solo durante esta importación. La contraseña no se guarda en Neon ni en la sesión.")
-        st.info("Flujo actualizado: cursos y horarios desde Curso matriculado → Imprimir boleta; notas actuales desde Curso matriculado → Imprimir notas; historial desde Fichas académicas → Avance curricular.")
-        with st.expander("Importar boleta, notas actuales y avance curricular desde alumnos.uni.edu.pe", expanded=False):
+        st.info("Flujo actualizado: cursos y horarios desde Curso matriculado → Imprimir boleta; historial desde Fichas académicas → Avance curricular. La importación de notas desde INTRALU fue retirada.")
+        with st.expander("Importar boleta y avance curricular desde alumnos.uni.edu.pe", expanded=False):
+            st.markdown("""
+            <div class='aura-login-card'>
+                <div class='aura-login-title'>Credenciales INTRALU</div>
+                <div class='aura-login-desc'>Ingresa tu código UNI y contraseña solo para esta importación. AURA no guarda tu contraseña.</div>
+            </div>
+            """, unsafe_allow_html=True)
             with st.form("form_intralu_import"):
                 col_intr1, col_intr2, col_intr3 = st.columns([1.1, 1.1, .8])
                 with col_intr1:
@@ -933,22 +968,21 @@ elif menu == "Perfil Académico":
                 with col_chk1:
                     intralu_reemplazar_horarios = st.checkbox("Reemplazar horarios anteriores", value=True, key="intralu_reemplazar_horarios")
                 with col_chk2:
-                    intralu_reemplazar_notas = st.checkbox("Reemplazar notas del ciclo", value=True, key="intralu_reemplazar_notas")
-                st.info("El proceso puede demorar porque AURA abre INTRALU, entra a Curso matriculado, descarga/lee la boleta, lee las notas actuales y luego revisa Avance curricular. Si aparece CAPTCHA o verificación adicional, usa la importación por PDF como respaldo.")
-                importar_intralu = st.form_submit_button("🌐 Importar boleta, notas y avance curricular")
+                    intralu_reemplazar_avance = st.checkbox("Reemplazar avance curricular", value=True, key="intralu_reemplazar_avance")
+                st.info("El proceso puede demorar porque AURA abre INTRALU, entra a Curso matriculado, descarga/lee la boleta y luego revisa Fichas académicas → Avance curricular. Si aparece CAPTCHA o verificación adicional, usa la importación por PDF como respaldo.")
+                importar_intralu = st.form_submit_button("🌐 Importar boleta y avance curricular")
 
             if importar_intralu:
                 if not intralu_codigo.strip() or not intralu_password:
                     st.error("Ingresa tu código UNI y contraseña.")
                 else:
                     try:
-                        with st.spinner("Conectando con INTRALU, leyendo boleta, notas actuales y avance curricular..."):
-                            datos_intralu = importar_cursos_horarios_notas_intralu(
+                        with st.spinner("Conectando con INTRALU, leyendo boleta y avance curricular..."):
+                            datos_intralu = importar_cursos_horarios_avance_intralu(
                                 intralu_codigo.strip(),
                                 intralu_password,
                                 intralu_ciclo.strip() or "20261",
                             )
-                        # Borrado defensivo de la variable de contraseña después de usarla.
                         intralu_password = None
 
                         exito, msg = importar_intralu_resultado(
@@ -956,7 +990,8 @@ elif menu == "Perfil Académico":
                             datos_intralu,
                             intralu_ciclo.strip() or "20261",
                             reemplazar_horarios=intralu_reemplazar_horarios,
-                            reemplazar_notas=intralu_reemplazar_notas,
+                            reemplazar_notas=False,
+                            reemplazar_avance=intralu_reemplazar_avance,
                         )
                         if exito:
                             st.success(msg)
@@ -966,18 +1001,14 @@ elif menu == "Perfil Académico":
                             if datos_intralu.get("advertencias"):
                                 for adv in datos_intralu.get("advertencias", []):
                                     st.warning(adv)
-                            col_prev1, col_prev2 = st.columns(2)
+                            col_prev1, col_prev2, col_prev3 = st.columns(3)
                             with col_prev1:
                                 st.caption("Cursos detectados")
                                 st.dataframe(pd.DataFrame(datos_intralu.get("cursos", [])), use_container_width=True)
                             with col_prev2:
                                 st.caption("Horarios detectados")
                                 st.dataframe(pd.DataFrame(datos_intralu.get("horarios", [])), use_container_width=True)
-                            col_prev3, col_prev4 = st.columns(2)
                             with col_prev3:
-                                st.caption("Notas detectadas")
-                                st.dataframe(pd.DataFrame(datos_intralu.get("notas", [])), use_container_width=True)
-                            with col_prev4:
                                 st.caption("Avance curricular detectado")
                                 st.dataframe(pd.DataFrame(datos_intralu.get("avance", [])), use_container_width=True)
                             st.rerun()
@@ -1139,22 +1170,6 @@ elif menu == "Perfil Académico":
                     st.rerun()
 
         render_calendario(horarios, [], "🗓️ Horario de clases")
-
-        st.divider()
-        st.subheader("📈 Notas importadas")
-        notas = listar_notas_por_estudiante(estudiante_id)
-        if notas:
-            df_notas = pd.DataFrame(
-                notas,
-                columns=["ID", "Ciclo", "Código", "Curso", "Tipo", "Evaluación", "Nota", "Peso", "Observación", "Fecha"],
-            )
-            st.dataframe(df_notas, use_container_width=True)
-            if st.button("🧹 Limpiar notas importadas"):
-                limpiar_notas_curso(estudiante_id)
-                st.warning("Notas eliminadas.")
-                st.rerun()
-        else:
-            st.info("Aún no hay notas importadas desde INTRALU.")
 
         if horarios and st.button("🧹 Limpiar todos los horarios"):
             limpiar_horarios_clase(estudiante_id)
@@ -1425,6 +1440,65 @@ elif menu == "Coach IA":
                 st.success("Recomendación generada y guardada.")
                 st.markdown(rec)
 
+elif menu == "Panel Admin":
+    st.header("🛡️ Panel Administrativo")
+    estudiantes = listar_estudiantes()
+    usuarios = listar_usuarios()
+    panel = obtener_panel_tutoria()
+    df_panel = pd.DataFrame(panel, columns=["ID", "Nombre", "Código", "Carrera", "Ciclo", "Promedio ponderado", "Estrés", "Motivación", "Procrastinación", "Estado de ánimo", "Alerta emocional", "Puntaje riesgo", "Nivel riesgo", "Fecha diagnóstico", "Total tareas", "Tareas pendientes", "Alta prioridad"]) if panel else pd.DataFrame()
+    total_alertas = int((df_panel["Alerta emocional"] == 1).sum()) if not df_panel.empty else 0
+    riesgo_alto = int((df_panel["Nivel riesgo"] == "Alto").sum()) if not df_panel.empty else 0
+    pendientes = int(df_panel["Tareas pendientes"].fillna(0).sum()) if not df_panel.empty and "Tareas pendientes" in df_panel else 0
+    st.markdown(f"""
+    <div class='aura-admin-grid'>
+      <div class='aura-admin-card'><h3>👥 Estudiantes</h3><p>Total registrados en AURA</p><div class='aura-admin-number'>{len(estudiantes)}</div></div>
+      <div class='aura-admin-card'><h3>🔐 Usuarios</h3><p>Cuentas activas en el sistema</p><div class='aura-admin-number'>{len(usuarios)}</div></div>
+      <div class='aura-admin-card'><h3>⚠️ Riesgo alto</h3><p>Estudiantes que requieren seguimiento</p><div class='aura-admin-number'>{riesgo_alto}</div></div>
+      <div class='aura-admin-card'><h3>📝 Pendientes</h3><p>Tareas pendientes acumuladas</p><div class='aura-admin-number'>{pendientes}</div></div>
+    </div>
+    """, unsafe_allow_html=True)
+    tab_resumen, tab_roles, tab_acciones = st.tabs(["📊 Resumen", "👤 Usuarios y roles", "⚙️ Acciones rápidas"])
+    with tab_resumen:
+        c1, c2 = st.columns(2)
+        with c1:
+            if not df_panel.empty:
+                conteo = df_panel["Nivel riesgo"].fillna("Sin diagnóstico").value_counts().reset_index()
+                conteo.columns = ["Nivel de riesgo", "Cantidad"]
+                fig = px.pie(conteo, names="Nivel de riesgo", values="Cantidad", color_discrete_sequence=PALETA, hole=.45)
+                fig.update_layout(height=350, margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor="rgba(255,255,255,0)")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Aún no hay diagnósticos registrados.")
+        with c2:
+            st.markdown("<div class='aura-section-title'>🚨 Alertas para revisar</div>", unsafe_allow_html=True)
+            if not df_panel.empty:
+                alertas = df_panel[(df_panel["Nivel riesgo"] == "Alto") | (df_panel["Alerta emocional"] == 1) | (df_panel["Alta prioridad"].fillna(0) > 0)]
+                if not alertas.empty:
+                    st.dataframe(alertas[["Nombre", "Código", "Nivel riesgo", "Alerta emocional", "Alta prioridad", "Fecha diagnóstico"]], use_container_width=True, hide_index=True)
+                else:
+                    st.success("No hay alertas críticas en este momento.")
+            else:
+                st.info("Sin información para mostrar.")
+    with tab_roles:
+        if usuarios:
+            df_users = pd.DataFrame(usuarios, columns=["ID", "Usuario", "Rol", "Estudiante vinculado", "Fecha"])
+            conteo_roles = df_users["Rol"].value_counts().reset_index()
+            conteo_roles.columns = ["Rol", "Cantidad"]
+            st.plotly_chart(px.bar(conteo_roles, x="Rol", y="Cantidad", text="Cantidad", color="Rol", color_discrete_sequence=PALETA), use_container_width=True)
+            st.dataframe(df_users, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay usuarios registrados.")
+    with tab_acciones:
+        st.markdown("""
+        <div class='aura-card'>
+        <b>Recomendación de uso:</b> primero revisa alertas en Panel de Tutoría, luego entra a Gestión de usuarios para crear accesos o vincular estudiantes.
+        </div>
+        """, unsafe_allow_html=True)
+        a1, a2, a3 = st.columns(3)
+        a1.info("👤 Crea usuarios desde Gestión de usuarios.")
+        a2.info("📦 Exporta tablas desde Exportar datos.")
+        a3.info("🧑‍🏫 Revisa estudiantes en Panel de Tutoría.")
+
 elif menu == "Panel de Tutoría":
     st.header("🧑‍🏫 Panel de Tutoría")
     datos = obtener_panel_tutoria()
@@ -1432,57 +1506,124 @@ elif menu == "Panel de Tutoría":
         st.info("Aún no hay estudiantes registrados.")
     else:
         df = pd.DataFrame(datos, columns=["ID", "Nombre", "Código", "Carrera", "Ciclo", "Promedio ponderado", "Estrés", "Motivación", "Procrastinación", "Estado de ánimo", "Alerta emocional", "Puntaje riesgo", "Nivel riesgo", "Fecha diagnóstico", "Total tareas", "Tareas pendientes", "Alta prioridad"])
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Total", len(df))
-        c2.metric("Riesgo alto", len(df[df["Nivel riesgo"] == "Alto"]))
-        c3.metric("Riesgo medio", len(df[df["Nivel riesgo"] == "Medio"]))
-        c4.metric("Riesgo bajo", len(df[df["Nivel riesgo"] == "Bajo"]))
-        c5.metric("Alertas", len(df[df["Alerta emocional"] == 1]))
-        filtro = st.selectbox("Filtrar por riesgo", ["Todos", "Alto", "Medio", "Bajo", "Sin diagnóstico"])
-        filtrado = df.copy()
-        if filtro != "Todos":
-            filtrado = filtrado[filtrado["Nivel riesgo"].isna()] if filtro == "Sin diagnóstico" else filtrado[filtrado["Nivel riesgo"] == filtro]
-        st.dataframe(filtrado, use_container_width=True)
-        conteo = df["Nivel riesgo"].fillna("Sin diagnóstico").value_counts().reset_index()
-        conteo.columns = ["Nivel de riesgo", "Cantidad"]
-        st.plotly_chart(px.bar(conteo, x="Nivel de riesgo", y="Cantidad", text="Cantidad", color="Nivel de riesgo", color_discrete_sequence=PALETA), use_container_width=True)
+        df["Nivel riesgo"] = df["Nivel riesgo"].fillna("Sin diagnóstico")
+        st.markdown(f"""
+        <div class='aura-admin-grid'>
+          <div class='aura-admin-card'><h3>👥 Estudiantes</h3><p>En seguimiento</p><div class='aura-admin-number'>{len(df)}</div></div>
+          <div class='aura-admin-card'><h3>🔴 Riesgo alto</h3><p>Necesitan intervención</p><div class='aura-admin-number'>{len(df[df['Nivel riesgo'] == 'Alto'])}</div></div>
+          <div class='aura-admin-card'><h3>🟡 Riesgo medio</h3><p>Requieren monitoreo</p><div class='aura-admin-number'>{len(df[df['Nivel riesgo'] == 'Medio'])}</div></div>
+          <div class='aura-admin-card'><h3>💙 Alertas emocionales</h3><p>Casos sensibles</p><div class='aura-admin-number'>{len(df[df['Alerta emocional'] == 1])}</div></div>
+        </div>
+        """, unsafe_allow_html=True)
+        tab_vista, tab_graficas, tab_detalle = st.tabs(["🚨 Priorización", "📊 Gráficas", "🔎 Detalle por estudiante"])
+        with tab_vista:
+            filtro = st.selectbox("Filtrar por riesgo", ["Todos", "Alto", "Medio", "Bajo", "Sin diagnóstico"])
+            busqueda = st.text_input("Buscar por nombre o código", placeholder="Ej: Joseph, 20230280J")
+            filtrado = df.copy()
+            if filtro != "Todos":
+                filtrado = filtrado[filtrado["Nivel riesgo"] == filtro]
+            if busqueda.strip():
+                q = busqueda.strip().lower()
+                filtrado = filtrado[filtrado["Nombre"].str.lower().str.contains(q, na=False) | filtrado["Código"].str.lower().str.contains(q, na=False)]
+            prioridad = filtrado.sort_values(by=["Nivel riesgo", "Alerta emocional", "Alta prioridad"], ascending=[True, False, False])
+            st.dataframe(prioridad[["Nombre", "Código", "Carrera", "Ciclo", "Nivel riesgo", "Puntaje riesgo", "Alerta emocional", "Tareas pendientes", "Alta prioridad", "Fecha diagnóstico"]], use_container_width=True, hide_index=True)
+        with tab_graficas:
+            g1, g2 = st.columns(2)
+            with g1:
+                conteo = df["Nivel riesgo"].value_counts().reset_index()
+                conteo.columns = ["Nivel de riesgo", "Cantidad"]
+                fig1 = px.bar(conteo, x="Nivel de riesgo", y="Cantidad", text="Cantidad", color="Nivel de riesgo", color_discrete_sequence=PALETA)
+                fig1.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor="rgba(255,255,255,0)", plot_bgcolor="rgba(255,255,255,0)")
+                st.plotly_chart(fig1, use_container_width=True)
+            with g2:
+                df_ind = df[["Estrés", "Motivación", "Procrastinación", "Estado de ánimo"]].apply(pd.to_numeric, errors="coerce").mean().reset_index()
+                df_ind.columns = ["Indicador", "Promedio"]
+                fig2 = px.bar(df_ind, x="Promedio", y="Indicador", orientation="h", text="Promedio", range_x=[0,5], color="Indicador", color_discrete_sequence=PALETA)
+                fig2.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+                fig2.update_layout(height=340, margin=dict(l=10, r=30, t=30, b=10), showlegend=False, paper_bgcolor="rgba(255,255,255,0)", plot_bgcolor="rgba(255,255,255,0)")
+                st.plotly_chart(fig2, use_container_width=True)
+        with tab_detalle:
+            opciones = {f"{r['Nombre']} | {r['Código']} | {r['Nivel riesgo']}": r for _, r in df.iterrows()}
+            sel = st.selectbox("Selecciona estudiante", list(opciones.keys()))
+            r = opciones[sel]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Riesgo", r["Nivel riesgo"])
+            c2.metric("Puntaje", r["Puntaje riesgo"] if pd.notna(r["Puntaje riesgo"]) else "-")
+            c3.metric("Pendientes", r["Tareas pendientes"] if pd.notna(r["Tareas pendientes"]) else 0)
+            c4.metric("Alta prioridad", r["Alta prioridad"] if pd.notna(r["Alta prioridad"]) else 0)
+            st.markdown(f"""
+            <div class='aura-card'>
+            <b>{html.escape(str(r['Nombre']))}</b><br>
+            Código: {html.escape(str(r['Código']))} · Carrera: {html.escape(str(r['Carrera']))} · Ciclo: {html.escape(str(r['Ciclo']))}<br>
+            Último diagnóstico: {html.escape(str(r['Fecha diagnóstico']))}
+            </div>
+            """, unsafe_allow_html=True)
 
 elif menu == "Gestión de usuarios":
     st.header("🛠️ Gestión de usuarios")
     estudiantes = listar_estudiantes()
+    usuarios = listar_usuarios()
     opciones_est = {"Sin vincular": None}
     for e in estudiantes:
         opciones_est[f"{e[1]} | Código: {e[2]}"] = e[0]
-    with st.popover("➕ Crear usuario"):
-        with st.form("form_crear_usuario"):
-            username = st.text_input("Usuario")
-            password = st.text_input("Contraseña", type="password")
-            rol = st.selectbox("Rol", ["Estudiante", "Tutor", "Administrador"])
-            est_txt = st.selectbox("Vincular estudiante", list(opciones_est.keys()))
-            if st.form_submit_button("Crear usuario"):
-                estudiante_link = opciones_est[est_txt]
-                if rol == "Estudiante" and estudiante_link is None:
-                    st.error("Un estudiante debe estar vinculado.")
-                else:
-                    exito, msg = registrar_usuario(username, password, rol, estudiante_link)
-                    st.success(msg) if exito else st.error(msg)
-                    if exito:
-                        st.rerun()
-    usuarios = listar_usuarios()
-    if usuarios:
-        st.dataframe(pd.DataFrame(usuarios, columns=["ID", "Usuario", "Rol", "Estudiante vinculado", "Fecha"]), use_container_width=True)
-        with st.expander("✏️ Editar o eliminar usuario"):
+
+    st.markdown("""
+    <div class='aura-card'>
+      <b>Administración de accesos</b><br>
+      Crea cuentas para estudiantes, tutores y administradores. Para usuarios con rol Estudiante, recuerda vincular un estudiante registrado.
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab_crear, tab_lista, tab_editar = st.tabs(["➕ Crear usuario", "📋 Lista de usuarios", "✏️ Editar / eliminar"])
+    with tab_crear:
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.markdown("""
+            <div class='aura-login-card'>
+              <div class='aura-login-title'>Nueva credencial</div>
+              <div class='aura-login-desc'>Usa un usuario claro y una contraseña temporal. Luego el usuario puede cambiarla desde su perfil.</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c2:
+            with st.form("form_crear_usuario"):
+                username = st.text_input("Usuario", placeholder="Ej: joseph20230280")
+                password = st.text_input("Contraseña", type="password", placeholder="Contraseña temporal")
+                rol = st.selectbox("Rol", ["Estudiante", "Tutor", "Administrador"])
+                est_txt = st.selectbox("Vincular estudiante", list(opciones_est.keys()))
+                if st.form_submit_button("💾 Crear usuario", use_container_width=True):
+                    estudiante_link = opciones_est[est_txt]
+                    if rol == "Estudiante" and estudiante_link is None:
+                        st.error("Un estudiante debe estar vinculado.")
+                    else:
+                        exito, msg = registrar_usuario(username, password, rol, estudiante_link)
+                        st.success(msg) if exito else st.error(msg)
+                        if exito:
+                            st.rerun()
+    with tab_lista:
+        if usuarios:
+            df_usuarios = pd.DataFrame(usuarios, columns=["ID", "Usuario", "Rol", "Estudiante vinculado", "Fecha"])
+            colu1, colu2, colu3 = st.columns(3)
+            colu1.metric("Usuarios", len(df_usuarios))
+            colu2.metric("Estudiantes", len(df_usuarios[df_usuarios["Rol"] == "Estudiante"]))
+            colu3.metric("Tutores/Admin", len(df_usuarios[df_usuarios["Rol"].isin(["Tutor", "Administrador"])]))
+            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no hay usuarios registrados.")
+    with tab_editar:
+        if usuarios:
             opts = {f"{u[1]} | {u[2]}": u for u in usuarios}
             sel = st.selectbox("Usuario", list(opts.keys()))
             u = opts[sel]
             with st.form("form_edit_usuario"):
                 user_n = st.text_input("Usuario", value=u[1])
                 pass_n = st.text_input("Nueva contraseña (opcional)", type="password")
-                cg, cb = st.columns(2)
-                if cg.form_submit_button("Actualizar"):
+                guardar, borrar = st.columns(2)
+                if guardar.form_submit_button("💾 Actualizar", use_container_width=True):
                     exito, msg = actualizar_usuario(u[0], user_n, pass_n)
                     st.success(msg) if exito else st.error(msg)
-                if cb.form_submit_button("Eliminar"):
+                    if exito:
+                        st.rerun()
+                if borrar.form_submit_button("🗑️ Eliminar", use_container_width=True):
                     if u[0] == usuario_actual["id"]:
                         st.error("No puedes eliminar tu propio usuario mientras estás logueado.")
                     else:
@@ -1490,6 +1631,8 @@ elif menu == "Gestión de usuarios":
                         st.success(msg) if exito else st.error(msg)
                         if exito:
                             st.rerun()
+        else:
+            st.info("No hay usuarios para editar.")
 
 elif menu == "Reportes":
     st.header("📄 Generación de reportes")
@@ -1517,7 +1660,7 @@ elif menu == "Reportes":
 
 elif menu == "Exportar datos":
     st.header("📦 Exportar datos")
-    tabla = st.selectbox("Tabla", ["estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "horarios_clase", "notas_curso", "avance_curricular", "planes_semanales", "coach_recomendaciones"])
+    tabla = st.selectbox("Tabla", ["estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "horarios_clase", "avance_curricular", "planes_semanales", "coach_recomendaciones"])
     columnas, filas = obtener_tabla_completa(tabla)
     df = pd.DataFrame(filas, columns=columnas)
     st.dataframe(df, use_container_width=True)

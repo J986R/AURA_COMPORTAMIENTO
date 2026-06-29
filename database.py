@@ -1231,10 +1231,23 @@ def obtener_indicador_riesgo_historico(estudiante_id: int):
         "resumen": resumen,
     }
 
-def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reemplazar_horarios: bool = True, reemplazar_notas: bool = True):
+def importar_intralu_resultado(
+    estudiante_id: int,
+    datos: dict,
+    ciclo: str,
+    reemplazar_horarios: bool = True,
+    reemplazar_notas: bool = False,
+    reemplazar_avance: bool = True,
+):
     """Guarda en Neon el resultado devuelto por intralu_scraper.
 
-    Las credenciales nunca entran a esta función. Solo llegan cursos, horarios y notas ya extraídos.
+    Flujo vigente:
+    - INTRALU -> Curso matriculado -> Imprimir boleta: cursos y horarios.
+    - INTRALU -> Fichas académicas -> Avance curricular: historial para riesgo.
+
+    La importación de notas actuales desde INTRALU fue retirada por solicitud del usuario.
+    La tabla notas_curso se conserva por compatibilidad, pero esta función no limpia ni carga notas
+    salvo que explícitamente lleguen datos de notas y reemplazar_notas=True.
     """
     cursos = datos.get("cursos", []) or []
     horarios = datos.get("horarios", []) or []
@@ -1245,6 +1258,7 @@ def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reem
         limpiar_horarios_clase(estudiante_id)
     if reemplazar_notas:
         limpiar_notas_curso(estudiante_id, ciclo)
+    if reemplazar_avance:
         limpiar_avance_curricular(estudiante_id)
 
     mapa_cursos = {}
@@ -1277,25 +1291,27 @@ def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reem
             aula=h.get("aula") or "",
         )
 
-    for n in notas:
-        codigo = n.get("codigo_curso") or n.get("codigo") or ""
-        curso_id = mapa_cursos.get(codigo)
-        if not curso_id:
-            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, n.get("nombre_curso") or codigo, 0, "")
-            mapa_cursos[codigo] = curso_id
-        guardar_nota_curso(
-            estudiante_id=estudiante_id,
-            curso_id=curso_id,
-            ciclo=n.get("ciclo") or ciclo,
-            codigo_curso=codigo,
-            nombre_curso=n.get("nombre_curso") or codigo,
-            tipo_evaluacion=n.get("tipo_evaluacion") or "Nota",
-            nombre_evaluacion=n.get("nombre_evaluacion") or "Evaluación",
-            nota=n.get("nota"),
-            peso=n.get("peso"),
-            observacion=n.get("observacion") or "",
-            origen=n.get("origen") or "INTRALU",
-        )
+    # Compatibilidad: no se llama desde el flujo actual de INTRALU.
+    if reemplazar_notas and notas:
+        for n in notas:
+            codigo = n.get("codigo_curso") or n.get("codigo") or ""
+            curso_id = mapa_cursos.get(codigo)
+            if not curso_id:
+                curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, n.get("nombre_curso") or codigo, 0, "")
+                mapa_cursos[codigo] = curso_id
+            guardar_nota_curso(
+                estudiante_id=estudiante_id,
+                curso_id=curso_id,
+                ciclo=n.get("ciclo") or ciclo,
+                codigo_curso=codigo,
+                nombre_curso=n.get("nombre_curso") or codigo,
+                tipo_evaluacion=n.get("tipo_evaluacion") or "Nota",
+                nombre_evaluacion=n.get("nombre_evaluacion") or "Evaluación",
+                nota=n.get("nota"),
+                peso=n.get("peso"),
+                observacion=n.get("observacion") or "",
+                origen=n.get("origen") or "INTRALU",
+            )
 
     for a in avance:
         codigo = a.get("codigo_curso") or a.get("codigo") or ""
@@ -1316,7 +1332,9 @@ def importar_intralu_resultado(estudiante_id: int, datos: dict, ciclo: str, reem
             origen=a.get("origen") or "INTRALU avance curricular",
         )
 
-    return True, f"Se importaron {len(cursos)} cursos, {len(horarios)} horarios, {len(notas)} notas y {len(avance)} registros de avance curricular desde INTRALU."
+    extra = f" y {len(notas)} notas" if reemplazar_notas and notas else ""
+    return True, f"Se importaron {len(cursos)} cursos, {len(horarios)} horarios{extra} y {len(avance)} registros de avance curricular desde INTRALU."
+
 
 def obtener_tabla_completa(tabla: str):
     permitidas = {"estudiantes", "usuarios", "diagnosticos", "cursos", "tareas", "planes_semanales", "coach_recomendaciones", "horarios_clase", "notas_curso", "avance_curricular"}

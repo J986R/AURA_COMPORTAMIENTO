@@ -3,8 +3,9 @@ Scraper seguro para INTRALU / alumnos.uni.edu.pe usado por AURA.
 
 Flujo actualizado según la navegación real indicada por el usuario:
 1) Cursos y horarios: INTRALU -> Curso matriculado -> Imprimir boleta.
-2) Notas actuales: INTRALU -> Curso matriculado -> Imprimir notas.
-3) Historial académico: INTRALU -> Fichas académicas -> Avance curricular.
+2) Historial académico: INTRALU -> Fichas académicas -> Avance curricular.
+
+La extracción de notas actuales desde INTRALU fue retirada.
 
 Reglas de seguridad:
 - La contraseña se usa solo en memoria durante la importación.
@@ -1487,13 +1488,14 @@ def _deduplicar_notas(notas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(salida.values())
 
 
-def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo: str = "20261", timeout_ms: int = 60000) -> Dict[str, Any]:
-    """Inicia sesión temporal en INTRALU e importa cursos, horarios y notas.
+def importar_cursos_horarios_avance_intralu(codigo_uni: str, password: str, ciclo: str = "20261", timeout_ms: int = 60000) -> Dict[str, Any]:
+    """Inicia sesión temporal en INTRALU e importa cursos, horarios y avance curricular.
 
-    Usa las rutas reales indicadas por el flujo de usuario:
-    - Curso matriculado -> Imprimir boleta.
-    - Curso matriculado -> Imprimir notas.
-    - Fichas académicas -> Avance curricular.
+    Flujo vigente solicitado por el usuario:
+    - Curso matriculado -> Imprimir boleta: cursos, docentes, horarios y aulas.
+    - Fichas académicas -> Avance curricular: historial académico para indicador de riesgo.
+
+    Importante: ya NO se extraen notas actuales desde INTRALU.
     """
     if not codigo_uni or not password:
         raise ValueError("Debes ingresar código UNI y contraseña.")
@@ -1502,7 +1504,7 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
     documentos: Dict[str, str] = {}
     cursos: List[Dict[str, Any]] = []
     horarios: List[Dict[str, Any]] = []
-    notas: List[Dict[str, Any]] = []
+    notas: List[Dict[str, Any]] = []  # Se mantiene vacío por compatibilidad con database.py.
     avance: List[Dict[str, Any]] = []
     estudiante: Dict[str, Any] = {"codigo": limpiar_texto(codigo_uni).upper()}
 
@@ -1540,18 +1542,19 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
             doc_boleta = _capturar_boleta(page, ciclo, timeout_ms)
             if doc_boleta:
                 documentos["boleta"] = doc_boleta.get("nombre", "boleta_matricula")
-                # Si INTRALU devolvió por error una pantalla de notas, la aprovechamos como notas,
-                # pero NO la mezclamos con cursos.
                 if es_documento_notas(doc_boleta) and not es_boleta_matricula(doc_boleta):
-                    notas.extend(extraer_notas_documento(doc_boleta, ciclo, "INTRALU documento capturado en boleta"))
+                    advertencias.append(
+                        "El documento capturado por 'Imprimir boleta' parece ser de notas. "
+                        "No se importó como cursos/horarios. Usa la boleta PDF como respaldo si INTRALU cambió el botón."
+                    )
             cursos_b, horarios_b, estudiante_b, adv_b = _extraer_boleta_documento(doc_boleta)
             cursos.extend(cursos_b)
             horarios.extend(horarios_b)
             estudiante.update({k: v for k, v in estudiante_b.items() if v})
             advertencias.extend(adv_b)
 
-            # Respaldo si el botón imprimir boleta no fue capturado: leer la página general
-            # SOLO si realmente parece boleta. Si parece notas, se procesa como notas.
+            # Respaldo si el botón imprimir boleta no fue capturado: leer la pantalla general
+            # SOLO si realmente parece boleta. Si parece notas, se descarta.
             if not cursos:
                 _ir_cursos_matriculados(page, ciclo, timeout_ms)
                 html_cursos = page.content()
@@ -1563,45 +1566,27 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
                     horarios.extend(horarios_html)
                     advertencias.extend(adv_html)
                 elif es_documento_notas(doc_pantalla):
-                    notas.extend(extraer_notas_documento(doc_pantalla, ciclo, "INTRALU pantalla curso matriculado"))
-                    advertencias.append("La pantalla de Curso matriculado parecía contener notas; no se cargó como cursos. Para cursos/horarios se requiere 'Imprimir boleta'.")
+                    advertencias.append(
+                        "La pantalla de Curso matriculado parecía contener notas; no se cargó como cursos. "
+                        "Para cursos/horarios se requiere 'Imprimir boleta'."
+                    )
                 else:
                     advertencias.append("No se cargaron cursos desde la pantalla general porque no tenía estructura de boleta de matrícula.")
 
             cursos = _deduplicar_cursos(cursos)
 
-            # 2) Notas actuales desde Curso matriculado -> Imprimir notas.
-            doc_notas = _capturar_notas_actuales(page, ciclo, timeout_ms)
-            if doc_notas:
-                documentos["notas_actuales"] = doc_notas.get("nombre", "notas_actuales")
-                notas_actuales = extraer_notas_documento(doc_notas, ciclo, "INTRALU imprimir notas")
-                notas.extend(notas_actuales)
-            else:
-                advertencias.append("No se encontró o no se pudo abrir 'Imprimir notas' en Curso matriculado.")
-
-            # Respaldo: detalle por curso.
-            if not notas and cursos:
-                notas_detalle, adv_detalle = _extraer_notas_por_detalle(page, cursos, ciclo, timeout_ms)
-                notas.extend(notas_detalle)
-                advertencias.extend(adv_detalle)
-
-            # 3) Historial completo desde Fichas académicas -> Avance curricular.
+            # 2) Historial completo desde Fichas académicas -> Avance curricular.
             doc_avance = _capturar_avance_curricular(page, timeout_ms)
             if doc_avance:
                 documentos["avance_curricular"] = doc_avance.get("nombre", "avance_curricular")
                 avance.extend(extraer_avance_documento(doc_avance))
-                notas_hist = extraer_notas_documento(doc_avance, ciclo, "INTRALU avance curricular")
-                notas.extend(notas_hist)
             else:
                 advertencias.append("No se encontró 'Fichas académicas -> Avance curricular' o no se pudo capturar el documento.")
 
-            notas = _deduplicar_notas(notas)
             avance = _deduplicar_avance(avance)
 
             if not cursos:
                 advertencias.append("No se importaron cursos. Revisa si INTRALU cambió el botón 'Imprimir boleta'.")
-            if not notas:
-                advertencias.append("No se importaron notas. Revisa si INTRALU cambió 'Imprimir notas' o 'Avance curricular'.")
             if not avance:
                 advertencias.append("No se detectó historial de avance curricular con número de veces; el diagnóstico usará los demás indicadores disponibles.")
 
@@ -1621,3 +1606,11 @@ def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo
         advertencias=advertencias,
         documentos=documentos,
     ).to_dict()
+
+
+def importar_cursos_horarios_notas_intralu(codigo_uni: str, password: str, ciclo: str = "20261", timeout_ms: int = 60000) -> Dict[str, Any]:
+    """Alias de compatibilidad.
+
+    Se conserva el nombre anterior para no romper despliegues antiguos, pero ya no extrae notas.
+    """
+    return importar_cursos_horarios_avance_intralu(codigo_uni, password, ciclo, timeout_ms)
