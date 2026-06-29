@@ -1186,7 +1186,7 @@ def guardar_nota_curso(
     nota: Optional[float],
     peso: Optional[float] = None,
     observacion: str = "",
-    origen: str = "INTRALU",
+    origen: str = "PDF reporte de notas",
 ):
     _execute(
         """
@@ -1271,7 +1271,7 @@ def guardar_avance_curricular(
     veces: int = 1,
     nota: Optional[float] = None,
     estado: str = "",
-    origen: str = "INTRALU avance curricular",
+    origen: str = "PDF avance curricular",
 ):
     _execute(
         """
@@ -1376,109 +1376,40 @@ def obtener_indicador_riesgo_historico(estudiante_id: int):
         "resumen": resumen,
     }
 
-def importar_intralu_resultado(
-    estudiante_id: int,
-    datos: dict,
-    ciclo: str,
-    reemplazar_horarios: bool = True,
-    reemplazar_notas: bool = False,
-    reemplazar_avance: bool = True,
-):
-    """Guarda en Neon el resultado devuelto por intralu_scraper.
 
-    Flujo vigente:
-    - INTRALU -> Curso matriculado -> Imprimir boleta: cursos y horarios.
-    - INTRALU -> Fichas académicas -> Avance curricular: historial para riesgo.
+def importar_reporte_notas_pdf(estudiante_id: int, notas: list, ciclo: str, reemplazar_notas: bool = True):
+    """Guarda notas leídas desde el PDF de reporte de notas.
 
-    La importación de notas actuales desde INTRALU fue retirada por solicitud del usuario.
-    La tabla notas_curso se conserva por compatibilidad, pero esta función no limpia ni carga notas
-    salvo que explícitamente lleguen datos de notas y reemplazar_notas=True.
+    La app recibe el PDF que sube el estudiante, lee las evaluaciones y las guarda en Neon.
     """
-    cursos = datos.get("cursos", []) or []
-    horarios = datos.get("horarios", []) or []
-    notas = datos.get("notas", []) or []
-    avance = datos.get("avance", []) or []
-
-    if reemplazar_horarios:
-        limpiar_horarios_clase(estudiante_id)
     if reemplazar_notas:
         limpiar_notas_curso(estudiante_id, ciclo)
-    if reemplazar_avance:
-        limpiar_avance_curricular(estudiante_id)
 
     mapa_cursos = {}
-    for curso in cursos:
-        codigo = curso.get("codigo_curso") or curso.get("codigo") or ""
-        nombre = curso.get("nombre_curso") or curso.get("nombre") or codigo
-        creditos = int(curso.get("creditos") or 0)
-        docente = curso.get("docente", "") or ""
-        curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, nombre, creditos, docente)
-        mapa_cursos[codigo] = curso_id
-        if curso.get("codigo"):
-            mapa_cursos[curso.get("codigo")] = curso_id
-
-    for h in horarios:
-        codigo = h.get("codigo_curso") or h.get("codigo") or ""
-        curso_id = mapa_cursos.get(codigo) or mapa_cursos.get(h.get("codigo"))
-        if not curso_id:
-            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, h.get("nombre_curso") or codigo, 0, h.get("docente", ""))
+    total = 0
+    for n in notas or []:
+        codigo = (n.get("codigo_curso") or n.get("codigo") or "").strip()
+        nombre = (n.get("nombre_curso") or codigo or "Curso sin código").strip()
+        if codigo in mapa_cursos:
+            curso_id = mapa_cursos[codigo]
+        else:
+            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, nombre, int(n.get("creditos") or 0), "")
             mapa_cursos[codigo] = curso_id
-        registrar_horario_clase(
+        guardar_nota_curso(
             estudiante_id=estudiante_id,
             curso_id=curso_id,
+            ciclo=n.get("ciclo") or ciclo,
             codigo_curso=codigo,
-            nombre_curso=h.get("nombre_curso") or codigo,
-            tipo=h.get("tipo") or "Clase",
-            docente=h.get("docente") or "",
-            dia=h.get("dia") or "",
-            hora_inicio=h.get("inicio") or h.get("hora_inicio") or "08:00",
-            hora_fin=h.get("fin") or h.get("hora_fin") or "09:00",
-            aula=h.get("aula") or "",
+            nombre_curso=nombre,
+            tipo_evaluacion=n.get("tipo_evaluacion") or "Nota",
+            nombre_evaluacion=n.get("nombre_evaluacion") or "Evaluación",
+            nota=n.get("nota"),
+            peso=n.get("peso"),
+            observacion=n.get("observacion") or "",
+            origen=n.get("origen") or "PDF reporte de notas",
         )
-
-    # Compatibilidad: no se llama desde el flujo actual de INTRALU.
-    if reemplazar_notas and notas:
-        for n in notas:
-            codigo = n.get("codigo_curso") or n.get("codigo") or ""
-            curso_id = mapa_cursos.get(codigo)
-            if not curso_id:
-                curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, n.get("nombre_curso") or codigo, 0, "")
-                mapa_cursos[codigo] = curso_id
-            guardar_nota_curso(
-                estudiante_id=estudiante_id,
-                curso_id=curso_id,
-                ciclo=n.get("ciclo") or ciclo,
-                codigo_curso=codigo,
-                nombre_curso=n.get("nombre_curso") or codigo,
-                tipo_evaluacion=n.get("tipo_evaluacion") or "Nota",
-                nombre_evaluacion=n.get("nombre_evaluacion") or "Evaluación",
-                nota=n.get("nota"),
-                peso=n.get("peso"),
-                observacion=n.get("observacion") or "",
-                origen=n.get("origen") or "INTRALU",
-            )
-
-    for a in avance:
-        codigo = a.get("codigo_curso") or a.get("codigo") or ""
-        curso_id = mapa_cursos.get(codigo)
-        if not curso_id:
-            curso_id = obtener_o_crear_curso_boleta(estudiante_id, codigo, a.get("nombre_curso") or codigo, int(a.get("creditos") or 0), "")
-            mapa_cursos[codigo] = curso_id
-        guardar_avance_curricular(
-            estudiante_id=estudiante_id,
-            curso_id=curso_id,
-            ciclo=a.get("ciclo") or "",
-            codigo_curso=codigo,
-            nombre_curso=a.get("nombre_curso") or codigo,
-            creditos=int(a.get("creditos") or 0),
-            veces=int(a.get("veces") or 1),
-            nota=a.get("nota"),
-            estado=a.get("estado") or "",
-            origen=a.get("origen") or "INTRALU avance curricular",
-        )
-
-    extra = f" y {len(notas)} notas" if reemplazar_notas and notas else ""
-    return True, f"Se importaron {len(cursos)} cursos, {len(horarios)} horarios{extra} y {len(avance)} registros de avance curricular desde INTRALU."
+        total += 1
+    return True, f"Se importaron {total} notas desde el reporte PDF."
 
 
 def obtener_tabla_completa(tabla: str):

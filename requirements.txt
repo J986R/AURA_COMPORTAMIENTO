@@ -1,8 +1,5 @@
-beautifulsoup4
-lxml
 openpyxl
 pandas
-playwright
 plotly
 psycopg[binary]
 pypdf

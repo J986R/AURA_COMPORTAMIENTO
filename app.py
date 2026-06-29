@@ -10,7 +10,7 @@ import streamlit.components.v1 as components
 
 from ai_engine import generar_diagnostico_ia, generar_plan_calendario_ia, generar_recomendacion_ia, nivel_por_puntaje
 from boleta_parser import parsear_boleta_matricula
-from intralu_scraper import importar_cursos_horarios_avance_intralu
+from notas_parser import parsear_reporte_notas_pdf
 from database import (
     actualizar_curso,
     actualizar_estado_tarea,
@@ -31,7 +31,8 @@ from database import (
     guardar_plan_semanal,
     guardar_recomendacion_coach,
     importar_boleta_matricula,
-    importar_intralu_resultado,
+    importar_reporte_notas_pdf,
+    listar_notas_por_estudiante,
     limpiar_horarios_clase,
     listar_cursos_por_estudiante,
     listar_estudiantes,
@@ -52,6 +53,7 @@ from database import (
     obtener_ultimo_plan_semanal,
     obtener_ultima_recomendacion_coach,
     obtener_resumen_tareas,
+    obtener_resumen_notas,
     obtener_usuario_por_id,
     registrar_curso,
     registrar_estudiante,
@@ -792,13 +794,13 @@ if menu == "Inicio":
     st.markdown(
         """
         <div class='aura-card'>
-        AURA integra diagnóstico académico con IA, seguimiento de cursos y tareas, lectura de boletas de matrícula,
+        AURA integra diagnóstico académico con IA, seguimiento de cursos y tareas, lectura de boletas de matrícula y reportes de notas PDF,
         calendario semanal inteligente y reportes para tutoría.
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.info("Flujo recomendado: importar boleta → diagnóstico IA → tareas → planificador calendario → coach IA → reportes.")
+    st.info("Flujo recomendado: importar boleta y reporte de notas PDF → diagnóstico IA → tareas → planificador calendario → coach IA → reportes.")
 
 elif menu == "Dashboard Estudiante":
     st.header("📊 Dashboard Estudiante")
@@ -852,6 +854,22 @@ elif menu == "Dashboard Estudiante":
                     st.info("Aún no hay cursos registrados.")
 
             st.divider()
+            st.subheader("📝 Notas importadas desde PDF")
+            resumen_notas = obtener_resumen_notas(estudiante_id)
+            if resumen_notas:
+                df_res_notas = pd.DataFrame(resumen_notas, columns=["Código", "Curso", "Promedio", "Mínima", "Evaluaciones"])
+                n1, n2, n3 = st.columns(3)
+                n1.metric("Cursos con notas", len(df_res_notas))
+                n2.metric("Promedio general", round(float(df_res_notas["Promedio"].mean()), 2))
+                n3.metric("Notas críticas", int((df_res_notas["Mínima"].astype(float) < 11).sum()))
+                fig_notas = px.bar(df_res_notas, x="Promedio", y="Curso", orientation="h", text="Promedio", range_x=[0, 20], color="Promedio", color_continuous_scale=["#FCA5A5", "#FDE68A", "#A7F3D0"])
+                fig_notas.update_traces(textposition="outside")
+                fig_notas.update_layout(height=320, margin=dict(l=8, r=36, t=20, b=8), showlegend=False, plot_bgcolor="rgba(255,255,255,0)", paper_bgcolor="rgba(255,255,255,0)")
+                st.plotly_chart(fig_notas, use_container_width=True)
+            else:
+                st.info("Aún no hay reporte de notas PDF importado.")
+
+            st.divider()
             st.subheader("📚 Historial académico importado")
             indicador_hist = obtener_indicador_riesgo_historico(estudiante_id)
             avance_dash = listar_avance_curricular(estudiante_id)
@@ -878,7 +896,7 @@ elif menu == "Dashboard Estudiante":
                 st.plotly_chart(fig_avance, use_container_width=True)
                 st.caption(indicador_hist.get("resumen", ""))
             else:
-                st.info("Aún no hay avance curricular importado. Puedes importarlo desde INTRALU en Perfil Académico.")
+                st.info("Aún no hay avance curricular importado. Por ahora AURA trabaja con la boleta de matrícula y el reporte de notas PDF.")
 
             st.divider()
             if detalle:
@@ -949,78 +967,50 @@ elif menu == "Perfil Académico":
                 st.code(str(error))
 
         st.divider()
-        st.subheader("🔐 Importar desde INTRALU")
-        st.caption("AURA usa tus credenciales solo durante esta importación. La contraseña no se guarda en Neon ni en la sesión.")
-        st.info("Flujo actualizado: cursos y horarios desde Curso matriculado → Imprimir boleta; historial desde Fichas académicas → Avance curricular. La importación de notas desde INTRALU fue retirada.")
-        with st.expander("Importar boleta y avance curricular desde alumnos.uni.edu.pe", expanded=False):
-            st.markdown("""
-            <div class='aura-login-card'>
-                <div class='aura-login-title'>Credenciales INTRALU</div>
-                <div class='aura-login-desc'>Ingresa tu código UNI y contraseña solo para esta importación. AURA no guarda tu contraseña.</div>
-            </div>
-            """, unsafe_allow_html=True)
-            with st.form("form_intralu_import"):
-                col_intr1, col_intr2, col_intr3 = st.columns([1.1, 1.1, .8])
-                with col_intr1:
-                    intralu_codigo = st.text_input("Código UNI", value=(codigo or "") if estudiante else "")
-                with col_intr2:
-                    intralu_password = st.text_input("Contraseña INTRALU", type="password")
-                with col_intr3:
-                    intralu_ciclo = st.text_input("Ciclo", value="20261")
-                col_chk1, col_chk2 = st.columns(2)
-                with col_chk1:
-                    intralu_reemplazar_horarios = st.checkbox("Reemplazar horarios anteriores", value=True, key="intralu_reemplazar_horarios")
-                with col_chk2:
-                    intralu_reemplazar_avance = st.checkbox("Reemplazar avance curricular", value=True, key="intralu_reemplazar_avance")
-                st.info("El proceso puede demorar porque AURA abre INTRALU, entra a Curso matriculado, descarga/lee la boleta y luego revisa Fichas académicas → Avance curricular. Si aparece CAPTCHA o verificación adicional, usa la importación por PDF como respaldo.")
-                importar_intralu = st.form_submit_button("🌐 Importar boleta y avance curricular")
-
-            if importar_intralu:
-                if not intralu_codigo.strip() or not intralu_password:
-                    st.error("Ingresa tu código UNI y contraseña.")
-                else:
-                    try:
-                        with st.spinner("Conectando con INTRALU, leyendo boleta y avance curricular..."):
-                            datos_intralu = importar_cursos_horarios_avance_intralu(
-                                intralu_codigo.strip(),
-                                intralu_password,
-                                intralu_ciclo.strip() or "20261",
-                            )
-                        intralu_password = None
-
-                        exito, msg = importar_intralu_resultado(
+        st.subheader("📝 Importar reporte de notas PDF")
+        st.write("Sube el PDF de tu reporte de notas del ciclo actual. AURA leerá las evaluaciones y las guardará para el dashboard, el seguimiento y las recomendaciones.")
+        st.caption("Ahora AURA ya no hace scraping de INTRALU. El estudiante solo debe subir su boleta de matrícula y su reporte de notas en PDF.")
+        col_rn1, col_rn2 = st.columns([1, 1])
+        with col_rn1:
+            ciclo_notas_pdf = st.text_input("Ciclo del reporte de notas", value="20261", key="ciclo_notas_pdf")
+        with col_rn2:
+            reemplazar_notas_pdf = st.checkbox("Reemplazar notas anteriores de este ciclo", value=True, key="reemplazar_notas_pdf")
+        archivo_notas = st.file_uploader("Reporte de notas PDF", type=["pdf"], key="reporte_notas_pdf")
+        if archivo_notas:
+            try:
+                datos_notas = parsear_reporte_notas_pdf(archivo_notas, ciclo_default=ciclo_notas_pdf.strip() or "20261")
+                notas_detectadas = datos_notas.get("notas", [])
+                if notas_detectadas:
+                    st.success(f"Se detectaron {len(notas_detectadas)} evaluaciones en el reporte de notas.")
+                    st.dataframe(pd.DataFrame(notas_detectadas), use_container_width=True)
+                    if st.button("📥 Importar reporte de notas"):
+                        exito, msg = importar_reporte_notas_pdf(
                             estudiante_id,
-                            datos_intralu,
-                            intralu_ciclo.strip() or "20261",
-                            reemplazar_horarios=intralu_reemplazar_horarios,
-                            reemplazar_notas=False,
-                            reemplazar_avance=intralu_reemplazar_avance,
+                            notas_detectadas,
+                            datos_notas.get("ciclo") or ciclo_notas_pdf.strip() or "20261",
+                            reemplazar_notas=reemplazar_notas_pdf,
                         )
                         if exito:
                             st.success(msg)
-                            documentos = datos_intralu.get("documentos", {}) or {}
-                            if documentos:
-                                st.caption("Documentos detectados: " + ", ".join([f"{k}: {v}" for k, v in documentos.items()]))
-                            if datos_intralu.get("advertencias"):
-                                for adv in datos_intralu.get("advertencias", []):
-                                    st.warning(adv)
-                            col_prev1, col_prev2, col_prev3 = st.columns(3)
-                            with col_prev1:
-                                st.caption("Cursos detectados")
-                                st.dataframe(pd.DataFrame(datos_intralu.get("cursos", [])), use_container_width=True)
-                            with col_prev2:
-                                st.caption("Horarios detectados")
-                                st.dataframe(pd.DataFrame(datos_intralu.get("horarios", [])), use_container_width=True)
-                            with col_prev3:
-                                st.caption("Avance curricular detectado")
-                                st.dataframe(pd.DataFrame(datos_intralu.get("avance", [])), use_container_width=True)
                             st.rerun()
                         else:
                             st.error(msg)
-                    except Exception as error:
-                        intralu_password = None
-                        st.error("No se pudo importar desde INTRALU. Verifica credenciales, conexión o usa la boleta PDF como respaldo.")
-                        st.code(str(error))
+                else:
+                    st.warning("No se detectaron notas automáticamente. Verifica que el PDF tenga texto seleccionable o sube otro reporte.")
+                    with st.expander("Ver texto leído del PDF"):
+                        st.text(datos_notas.get("texto_preview", ""))
+            except Exception as error:
+                st.error("No se pudo leer el reporte de notas. Verifica que sea un PDF con texto seleccionable.")
+                st.code(str(error))
+
+        notas_actuales = listar_notas_por_estudiante(estudiante_id, ciclo_notas_pdf.strip() or None)
+        if notas_actuales:
+            st.subheader("📌 Notas registradas")
+            df_notas = pd.DataFrame(
+                notas_actuales,
+                columns=["ID", "Ciclo", "Código", "Curso", "Tipo", "Evaluación", "Nota", "Peso", "Observación", "Fecha"],
+            )
+            st.dataframe(df_notas, use_container_width=True)
 
         st.divider()
         avance_actual = listar_avance_curricular(estudiante_id)
@@ -1195,7 +1185,7 @@ elif menu == "Diagnóstico Académico":
             else:
                 st.info(f"Historial académico importado: {historial_riesgo.get('resumen')}")
         else:
-            st.caption("Aún no hay avance curricular importado. Si lo importas desde INTRALU, AURA lo usará como indicador adicional de riesgo.")
+            st.caption("Aún no hay avance curricular importado. Si luego agregas un avance curricular por PDF, AURA podrá usarlo como indicador adicional de riesgo.")
         st.warning("Este diagnóstico es una orientación académica y de bienestar, no un diagnóstico clínico.")
         st.info("Escala: 1 = Nunca | 2 = Casi nunca | 3 = A veces | 4 = Casi siempre | 5 = Siempre")
         pref = f"diag_{estudiante_id}_"
