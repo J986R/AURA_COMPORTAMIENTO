@@ -17,6 +17,7 @@ from database import (
     actualizar_tarea,
     actualizar_estudiante,
     actualizar_usuario,
+    actualizar_usuario_admin,
     autenticar_usuario,
     crear_tablas,
     eliminar_curso,
@@ -54,6 +55,8 @@ from database import (
     obtener_usuario_por_id,
     registrar_curso,
     registrar_estudiante,
+    registrar_estudiante_seguro,
+    crear_estudiante_y_usuario,
     registrar_horario_clase,
     registrar_tarea,
     registrar_usuario,
@@ -1560,70 +1563,227 @@ elif menu == "Panel de Tutoría":
             """, unsafe_allow_html=True)
 
 elif menu == "Gestión de usuarios":
-    st.header("🛠️ Gestión de usuarios")
+    st.header("🛠️ Gestión de usuarios y estudiantes")
     estudiantes = listar_estudiantes()
     usuarios = listar_usuarios()
-    opciones_est = {"Sin vincular": None}
-    for e in estudiantes:
-        opciones_est[f"{e[1]} | Código: {e[2]}"] = e[0]
+
+    def _usuario_sugerido(nombre, codigo):
+        codigo = (codigo or "").strip().lower()
+        if codigo:
+            return codigo
+        partes = [p for p in (nombre or "").strip().lower().split() if p]
+        if len(partes) >= 2:
+            return f"{partes[0]}.{partes[-1]}"
+        if partes:
+            return partes[0]
+        return ""
+
+    def _opciones_estudiantes(incluir_sin_vincular=True):
+        opciones = {}
+        if incluir_sin_vincular:
+            opciones["Sin vincular"] = None
+        for e in listar_estudiantes():
+            opciones[f"{e[1]} | Código: {e[2] or 'sin código'}"] = e[0]
+        return opciones
 
     st.markdown("""
     <div class='aura-card'>
-      <b>Administración de accesos</b><br>
-      Crea cuentas para estudiantes, tutores y administradores. Para usuarios con rol Estudiante, recuerda vincular un estudiante registrado.
+      <b>Administración simple</b><br>
+      Ahora puedes crear el estudiante y su acceso en un solo paso. También puedes registrar estudiantes sin usuario, vincular usuarios existentes o editar cuentas ya creadas.
     </div>
     """, unsafe_allow_html=True)
 
-    tab_crear, tab_lista, tab_editar = st.tabs(["➕ Crear usuario", "📋 Lista de usuarios", "✏️ Editar / eliminar"])
-    with tab_crear:
-        c1, c2 = st.columns([1, 1])
-        with c1:
+    total_est = len(estudiantes)
+    total_usu = len(usuarios)
+    total_alumnos = len([u for u in usuarios if u[2] == "Estudiante"])
+    total_admin_tutor = len([u for u in usuarios if u[2] in ["Tutor", "Administrador"]])
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("👥 Estudiantes", total_est)
+    m2.metric("🔐 Usuarios", total_usu)
+    m3.metric("🎓 Accesos alumno", total_alumnos)
+    m4.metric("🧑‍🏫 Tutor/Admin", total_admin_tutor)
+
+    tab_nuevo, tab_existente, tab_estudiantes, tab_usuarios, tab_editar = st.tabs([
+        "🚀 Crear estudiante + acceso",
+        "🔐 Crear usuario existente",
+        "🎓 Estudiantes",
+        "📋 Usuarios",
+        "✏️ Editar / eliminar",
+    ])
+
+    with tab_nuevo:
+        col_info, col_form = st.columns([0.85, 1.15])
+        with col_info:
             st.markdown("""
             <div class='aura-login-card'>
-              <div class='aura-login-title'>Nueva credencial</div>
-              <div class='aura-login-desc'>Usa un usuario claro y una contraseña temporal. Luego el usuario puede cambiarla desde su perfil.</div>
+              <div class='aura-login-title'>Crear alumno completo</div>
+              <div class='aura-login-desc'>Usa esta opción cuando el estudiante todavía no existe en AURA. Se registran sus datos académicos y se crea su usuario de ingreso al mismo tiempo.</div>
             </div>
             """, unsafe_allow_html=True)
-        with c2:
-            with st.form("form_crear_usuario"):
-                username = st.text_input("Usuario", placeholder="Ej: joseph20230280")
-                password = st.text_input("Contraseña", type="password", placeholder="Contraseña temporal")
+            st.info("Recomendación: usa el código UNI como usuario. Ejemplo: 20230280j")
+        with col_form:
+            with st.form("form_crear_estudiante_y_usuario"):
+                st.subheader("Datos del estudiante")
+                nombre = st.text_input("Nombre completo", placeholder="Ej: Gonzales Revilla Joseph Rodrigo")
+                c1, c2 = st.columns(2)
+                codigo = c1.text_input("Código UNI", placeholder="Ej: 20230280J")
+                ciclo = c2.text_input("Ciclo actual", placeholder="Ej: 2026-1")
+                carrera = st.text_input("Carrera / especialidad", value="Ingeniería Industrial")
+
+                st.divider()
+                st.subheader("Credenciales de acceso")
+                username = st.text_input("Usuario", placeholder="Déjalo vacío para usar el código UNI")
+                password = st.text_input("Contraseña temporal", type="password", placeholder="Mínimo 4 caracteres")
+                confirmar = st.text_input("Confirmar contraseña", type="password")
+
+                crear = st.form_submit_button("➕ Crear estudiante y acceso", use_container_width=True)
+                if crear:
+                    username_final = (username or _usuario_sugerido(nombre, codigo)).strip()
+                    if not username_final:
+                        st.error("Escribe un usuario o coloca el código UNI para generarlo automáticamente.")
+                    elif password != confirmar:
+                        st.error("Las contraseñas no coinciden.")
+                    else:
+                        exito, msg, nuevo_id = crear_estudiante_y_usuario(
+                            nombre=nombre,
+                            codigo=codigo,
+                            carrera=carrera,
+                            ciclo=ciclo,
+                            username=username_final,
+                            password=password,
+                        )
+                        if exito:
+                            st.success(f"{msg} Usuario creado: {username_final}")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+    with tab_existente:
+        col_info, col_form = st.columns([0.85, 1.15])
+        with col_info:
+            st.markdown("""
+            <div class='aura-login-card'>
+              <div class='aura-login-title'>Crear solo usuario</div>
+              <div class='aura-login-desc'>Úsalo cuando el estudiante ya fue registrado o cuando necesites crear una cuenta de tutor o administrador.</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_form:
+            with st.form("form_crear_usuario_existente"):
+                username = st.text_input("Usuario", placeholder="Ej: tutor.fiis")
+                password = st.text_input("Contraseña temporal", type="password")
                 rol = st.selectbox("Rol", ["Estudiante", "Tutor", "Administrador"])
-                est_txt = st.selectbox("Vincular estudiante", list(opciones_est.keys()))
-                if st.form_submit_button("💾 Crear usuario", use_container_width=True):
-                    estudiante_link = opciones_est[est_txt]
+                opciones_est = _opciones_estudiantes(incluir_sin_vincular=(rol != "Estudiante"))
+                if rol == "Estudiante" and not opciones_est:
+                    st.warning("No hay estudiantes registrados. Primero crea el estudiante en la pestaña anterior.")
+                    est_txt = None
+                else:
+                    est_txt = st.selectbox("Vincular estudiante", list(opciones_est.keys()))
+                submit = st.form_submit_button("💾 Crear usuario", use_container_width=True)
+                if submit:
+                    estudiante_link = opciones_est.get(est_txt) if est_txt else None
                     if rol == "Estudiante" and estudiante_link is None:
-                        st.error("Un estudiante debe estar vinculado.")
+                        st.error("Un usuario estudiante debe estar vinculado a un estudiante registrado.")
+                    elif len((password or "").strip()) < 4:
+                        st.error("La contraseña debe tener al menos 4 caracteres.")
                     else:
                         exito, msg = registrar_usuario(username, password, rol, estudiante_link)
-                        st.success(msg) if exito else st.error(msg)
                         if exito:
+                            st.success(msg)
                             st.rerun()
-    with tab_lista:
-        if usuarios:
-            df_usuarios = pd.DataFrame(usuarios, columns=["ID", "Usuario", "Rol", "Estudiante vinculado", "Fecha"])
-            colu1, colu2, colu3 = st.columns(3)
-            colu1.metric("Usuarios", len(df_usuarios))
-            colu2.metric("Estudiantes", len(df_usuarios[df_usuarios["Rol"] == "Estudiante"]))
-            colu3.metric("Tutores/Admin", len(df_usuarios[df_usuarios["Rol"].isin(["Tutor", "Administrador"])]))
-            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
-        else:
-            st.info("Aún no hay usuarios registrados.")
-    with tab_editar:
-        if usuarios:
-            opts = {f"{u[1]} | {u[2]}": u for u in usuarios}
-            sel = st.selectbox("Usuario", list(opts.keys()))
-            u = opts[sel]
-            with st.form("form_edit_usuario"):
-                user_n = st.text_input("Usuario", value=u[1])
-                pass_n = st.text_input("Nueva contraseña (opcional)", type="password")
+                        else:
+                            st.error(msg)
+
+    with tab_estudiantes:
+        sub1, sub2 = st.columns([1, 1])
+        with sub1:
+            with st.expander("➕ Registrar estudiante sin usuario", expanded=False):
+                with st.form("form_crear_estudiante_sin_usuario"):
+                    nombre = st.text_input("Nombre completo", key="est_solo_nombre")
+                    c1, c2 = st.columns(2)
+                    codigo = c1.text_input("Código UNI", key="est_solo_codigo")
+                    ciclo = c2.text_input("Ciclo actual", key="est_solo_ciclo")
+                    carrera = st.text_input("Carrera / especialidad", value="Ingeniería Industrial", key="est_solo_carrera")
+                    if st.form_submit_button("➕ Registrar estudiante", use_container_width=True):
+                        exito, msg, _ = registrar_estudiante_seguro(nombre, codigo, carrera, ciclo)
+                        if exito:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+        with sub2:
+            st.info("Si quieres que el alumno pueda entrar al sistema, usa la pestaña **Crear estudiante + acceso** o crea un usuario y vincúlalo aquí.")
+
+        estudiantes_actualizados = listar_estudiantes()
+        if estudiantes_actualizados:
+            df_est = pd.DataFrame(estudiantes_actualizados, columns=["ID", "Nombre", "Código", "Carrera", "Ciclo"])
+            st.dataframe(df_est, use_container_width=True, hide_index=True)
+
+            st.subheader("✏️ Editar estudiante")
+            opts_est = {f"{e[1]} | Código: {e[2] or 'sin código'}": e for e in estudiantes_actualizados}
+            sel_est = st.selectbox("Selecciona estudiante", list(opts_est.keys()), key="select_admin_estudiante")
+            e = opts_est[sel_est]
+            with st.form("form_editar_estudiante_admin"):
+                nombre_n = st.text_input("Nombre", value=e[1])
+                c1, c2 = st.columns(2)
+                codigo_n = c1.text_input("Código", value=e[2] or "")
+                ciclo_n = c2.text_input("Ciclo", value=e[4] or "")
+                carrera_n = st.text_input("Carrera", value=e[3] or "")
                 guardar, borrar = st.columns(2)
-                if guardar.form_submit_button("💾 Actualizar", use_container_width=True):
-                    exito, msg = actualizar_usuario(u[0], user_n, pass_n)
+                if guardar.form_submit_button("💾 Guardar cambios", use_container_width=True):
+                    exito, msg = actualizar_estudiante(e[0], nombre_n, codigo_n, carrera_n, ciclo_n)
                     st.success(msg) if exito else st.error(msg)
                     if exito:
                         st.rerun()
-                if borrar.form_submit_button("🗑️ Eliminar", use_container_width=True):
+                if borrar.form_submit_button("🗑️ Eliminar estudiante", use_container_width=True):
+                    exito, msg = eliminar_estudiante(e[0])
+                    st.success(msg) if exito else st.error(msg)
+                    if exito:
+                        st.rerun()
+        else:
+            st.info("Aún no hay estudiantes registrados.")
+
+    with tab_usuarios:
+        usuarios_actualizados = listar_usuarios()
+        if usuarios_actualizados:
+            df_usuarios = pd.DataFrame(usuarios_actualizados, columns=["ID", "Usuario", "Rol", "Estudiante vinculado", "Fecha"])
+            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no hay usuarios registrados.")
+
+    with tab_editar:
+        usuarios_actualizados = listar_usuarios()
+        if usuarios_actualizados:
+            opts = {f"{u[1]} | {u[2]} | {u[3] or 'sin estudiante'}": u for u in usuarios_actualizados}
+            sel = st.selectbox("Usuario", list(opts.keys()))
+            u = opts[sel]
+            detalle_usuario = obtener_usuario_por_id(u[0])
+            rol_actual_edit = detalle_usuario[2] if detalle_usuario else u[2]
+            estudiante_actual_id = detalle_usuario[3] if detalle_usuario else None
+
+            with st.form("form_edit_usuario_admin"):
+                user_n = st.text_input("Usuario", value=u[1])
+                rol_n = st.selectbox("Rol", ["Estudiante", "Tutor", "Administrador"], index=["Estudiante", "Tutor", "Administrador"].index(rol_actual_edit))
+                opciones_est = _opciones_estudiantes(incluir_sin_vincular=(rol_n != "Estudiante"))
+                # Buscar opción actual.
+                default_index = 0
+                for idx, (_, est_id) in enumerate(opciones_est.items()):
+                    if est_id == estudiante_actual_id:
+                        default_index = idx
+                        break
+                est_txt = st.selectbox("Estudiante vinculado", list(opciones_est.keys()), index=default_index)
+                pass_n = st.text_input("Nueva contraseña (opcional)", type="password")
+                guardar, borrar = st.columns(2)
+                if guardar.form_submit_button("💾 Actualizar usuario", use_container_width=True):
+                    estudiante_link = opciones_est.get(est_txt)
+                    exito, msg = actualizar_usuario_admin(u[0], user_n, rol_n, estudiante_link, pass_n)
+                    st.success(msg) if exito else st.error(msg)
+                    if exito:
+                        if u[0] == usuario_actual["id"]:
+                            st.session_state.usuario_logueado["username"] = user_n
+                            st.session_state.usuario_logueado["rol"] = rol_n
+                            st.session_state.usuario_logueado["estudiante_id"] = estudiante_link
+                        st.rerun()
+                if borrar.form_submit_button("🗑️ Eliminar usuario", use_container_width=True):
                     if u[0] == usuario_actual["id"]:
                         st.error("No puedes eliminar tu propio usuario mientras estás logueado.")
                     else:

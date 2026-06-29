@@ -308,6 +308,151 @@ def registrar_usuario(username: str, password: str, rol: str, estudiante_id: Opt
         return False, str(e)
 
 
+
+
+def buscar_estudiante_por_codigo(codigo: str):
+    codigo = (codigo or "").strip()
+    if not codigo:
+        return None
+    return _fetchone(
+        """
+        SELECT id, nombre, codigo, carrera, ciclo
+        FROM estudiantes
+        WHERE LOWER(TRIM(codigo)) = LOWER(TRIM(%s))
+        LIMIT 1
+        """,
+        (codigo,),
+    )
+
+
+def registrar_estudiante_seguro(nombre: str, codigo: str, carrera: str, ciclo: str):
+    nombre = (nombre or "").strip()
+    codigo = (codigo or "").strip()
+    carrera = (carrera or "").strip()
+    ciclo = (ciclo or "").strip()
+
+    if not nombre:
+        return False, "El nombre del estudiante es obligatorio.", None
+
+    existente = buscar_estudiante_por_codigo(codigo) if codigo else None
+    if existente is not None:
+        return False, f"Ya existe un estudiante registrado con el código {codigo}.", existente[0]
+
+    try:
+        estudiante_id = registrar_estudiante(nombre, codigo, carrera, ciclo)
+        return True, "Estudiante registrado correctamente.", estudiante_id
+    except Exception as e:
+        return False, f"No se pudo registrar el estudiante: {e}", None
+
+
+def crear_estudiante_y_usuario(
+    nombre: str,
+    codigo: str,
+    carrera: str,
+    ciclo: str,
+    username: str,
+    password: str,
+):
+    nombre = (nombre or "").strip()
+    codigo = (codigo or "").strip()
+    carrera = (carrera or "").strip()
+    ciclo = (ciclo or "").strip()
+    username = (username or "").strip()
+    password = (password or "").strip()
+
+    if not nombre:
+        return False, "El nombre del estudiante es obligatorio.", None
+    if not username:
+        return False, "El usuario es obligatorio.", None
+    if len(password) < 4:
+        return False, "La contraseña debe tener al menos 4 caracteres.", None
+
+    existente = buscar_estudiante_por_codigo(codigo) if codigo else None
+    if existente is not None:
+        return False, f"Ya existe un estudiante registrado con el código {codigo}.", existente[0]
+
+    try:
+        with conectar() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO estudiantes (nombre, codigo, carrera, ciclo, fecha_registro)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (nombre, codigo, carrera, ciclo, datetime.now()),
+                )
+                estudiante_id = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    INSERT INTO usuarios (username, password_hash, rol, estudiante_id, fecha_registro)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (username, hash_password(password), "Estudiante", estudiante_id, datetime.now()),
+                )
+            conn.commit()
+        return True, "Estudiante y usuario creados correctamente.", estudiante_id
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            return False, "El nombre de usuario ya existe. Prueba con otro usuario.", None
+        return False, f"No se pudo crear el estudiante y usuario: {e}", None
+
+
+def actualizar_usuario_admin(
+    usuario_id: int,
+    username: str,
+    rol: str,
+    estudiante_id: Optional[int] = None,
+    password: Optional[str] = None,
+):
+    username = (username or "").strip()
+    rol = (rol or "").strip()
+    estudiante_id = estudiante_id if rol == "Estudiante" else None
+
+    if not username:
+        return False, "El usuario no puede estar vacío."
+    if rol == "Estudiante" and estudiante_id is None:
+        return False, "Los usuarios con rol Estudiante deben estar vinculados a un estudiante."
+
+    try:
+        with conectar() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT rol FROM usuarios WHERE id = %s", (usuario_id,))
+                fila = cur.fetchone()
+                if fila is None:
+                    return False, "El usuario no existe."
+                rol_actual = fila[0]
+                if rol_actual == "Administrador" and rol != "Administrador":
+                    cur.execute("SELECT COUNT(*) FROM usuarios WHERE rol = 'Administrador'")
+                    if cur.fetchone()[0] <= 1:
+                        return False, "No puedes quitar el rol al último administrador."
+
+                if password and password.strip():
+                    cur.execute(
+                        """
+                        UPDATE usuarios
+                        SET username = %s, password_hash = %s, rol = %s, estudiante_id = %s
+                        WHERE id = %s
+                        """,
+                        (username, hash_password(password.strip()), rol, estudiante_id, usuario_id),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE usuarios
+                        SET username = %s, rol = %s, estudiante_id = %s
+                        WHERE id = %s
+                        """,
+                        (username, rol, estudiante_id, usuario_id),
+                    )
+            conn.commit()
+        return True, "Usuario actualizado correctamente."
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            return False, "El nombre de usuario ya existe."
+        return False, str(e)
+
+
 def listar_usuarios():
     return _fetchall(
         """
